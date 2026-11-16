@@ -2,6 +2,7 @@ package com.example.codeknowledgegraph.controller;
 
 import com.example.codeknowledgegraph.parser.CodeAnalyzer;
 import com.example.codeknowledgegraph.parser.model.AnalysisResult;
+import com.example.codeknowledgegraph.service.GitCloneService;
 import com.example.codeknowledgegraph.service.GraphQueryService;
 import com.example.codeknowledgegraph.service.GraphStoreService;
 import org.springframework.http.ResponseEntity;
@@ -25,21 +26,45 @@ public class ApiController {
     private final CodeAnalyzer analyzer;
     private final GraphStoreService store;
     private final GraphQueryService query;
+    private final GitCloneService gitClone;
 
-    public ApiController(CodeAnalyzer analyzer, GraphStoreService store, GraphQueryService query) {
+    public ApiController(CodeAnalyzer analyzer, GraphStoreService store,
+                         GraphQueryService query, GitCloneService gitClone) {
         this.analyzer = analyzer;
         this.store = store;
         this.query = query;
+        this.gitClone = gitClone;
     }
 
     // ==================== 项目管理 ====================
 
-    public record AnalyzeRequest(String name, String path) {}
+    public record AnalyzeRequest(String name, String path, String gitUrl, String branch) {}
 
     @PostMapping("/projects")
     public ResponseEntity<?> analyzeProject(@RequestBody AnalyzeRequest request) throws Exception {
+        // ---- Git URL 模式:克隆到临时目录,分析完清理 ----
+        if (request.gitUrl() != null && !request.gitUrl().isBlank()) {
+            GitCloneService.ClonedRepo cloned;
+            try {
+                cloned = gitClone.clone(request.gitUrl(), request.branch());
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            }
+            try {
+                String name = (request.name() == null || request.name().isBlank())
+                        ? cloned.defaultName() : request.name().trim();
+                AnalysisResult result = analyzer.analyze(name, cloned.directory());
+                Map<String, Object> stats = store.replaceProject(result, cloned.source(), cloned.commit());
+                return ResponseEntity.ok(stats);
+            } finally {
+                // 删除整个临时目录(包含 .git)
+                gitClone.deleteRecursively(cloned.directory().getParent());
+            }
+        }
+
+        // ---- 本地路径模式 ----
         if (request.path() == null || request.path().isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "path 不能为空"));
+            return ResponseEntity.badRequest().body(Map.of("error", "请提供 gitUrl 或 path"));
         }
         Path root = Path.of(request.path().trim());
         if (!Files.isDirectory(root)) {
@@ -49,7 +74,7 @@ public class ApiController {
                 ? root.getFileName().toString() : request.name().trim();
 
         AnalysisResult result = analyzer.analyze(name, root);
-        Map<String, Object> stats = store.replaceProject(result);
+        Map<String, Object> stats = store.replaceProject(result, root.toAbsolutePath().toString(), null);
         return ResponseEntity.ok(stats);
     }
 

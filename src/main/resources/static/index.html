@@ -56,7 +56,7 @@
   <h1>📊 代码知识图谱</h1>
   <select id="project-select"><option value="">选择项目…</option></select>
   <input id="search-input" placeholder="搜索类名/方法名…" autocomplete="off">
-  <button id="btn-analyze" class="ghost">分析目录</button>
+  <button id="btn-analyze" class="ghost">分析项目</button>
   <button id="btn-cycles" class="ghost">循环依赖</button>
   <button id="btn-refresh" class="ghost">刷新图谱</button>
 </header>
@@ -100,25 +100,59 @@ async function loadProjects() {
   const projects = await api('/projects');
   const sel = $('project-select');
   sel.innerHTML = '<option value="">选择项目…</option>' +
-    projects.map(p => `<option value="${p.name}">${p.name} (${p.typeCount} 类型)</option>`).join('');
+    projects.map(p => `<option value="${p.name}">${p.name} (${p.typeCount} 类型${p.commit ? ' @' + p.commit : ''})</option>`).join('');
   if (!currentProject && projects.length) { currentProject = projects[0].name; sel.value = currentProject; loadOverview(currentProject); }
 }
 
 function onAnalyze() {
-  const path = prompt('请输入要分析的 Java 项目根目录(绝对路径):\n例如: /Users/zhangxinxin/IdeaProjects/SomeProject');
-  if (!path) return;
-  toast('正在分析,请稍候…', 60000);
-  fetch('/api/projects', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path })
-  }).then(r => r.json()).then(async res => {
-    if (res.error) { toast('分析失败: ' + res.error, 4000); return; }
-    toast(`分析完成: ${res.files} 文件 / ${res.types} 类型 / ${res.methods} 方法 / ${res.callRelations} 调用关系`, 5000);
-    await loadProjects();
-    currentProject = res.project;
-    $('project-select').value = currentProject;
-    loadOverview(currentProject);
-  }).catch(e => toast('请求失败: ' + e.message));
+  $('modal').innerHTML = `
+    <h3>分析项目</h3>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-top:16px">
+      <div>
+        <div style="font-size:12px;color:#64748b;margin-bottom:4px">Git 仓库地址 或 本地目录绝对路径 *</div>
+        <input id="inp-url" placeholder="https://github.com/user/repo.git 或 /Users/xxx/项目路径"
+          style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;font-family:ui-monospace,Menlo,monospace">
+      </div>
+      <div style="display:flex;gap:12px">
+        <div style="flex:1">
+          <div style="font-size:12px;color:#64748b;margin-bottom:4px">分支 / Tag(可选,仅 Git)</div>
+          <input id="inp-branch" placeholder="默认分支"
+            style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">
+        </div>
+        <div style="flex:1">
+          <div style="font-size:12px;color:#64748b;margin-bottom:4px">项目名称(可选)</div>
+          <input id="inp-name" placeholder="自动推断"
+            style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">
+        </div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8">Git 仓库使用浅克隆(--depth 1),私有仓库会自动使用你本机的 git 凭证(ssh key 等);分析完成后临时文件自动清理。</div>
+      <button id="btn-do-analyze" style="padding:9px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">开始分析</button>
+    </div>`;
+  $('modal-mask').style.display = 'flex';
+  $('inp-url').focus();
+  $('btn-do-analyze').addEventListener('click', () => {
+    const input = $('inp-url').value.trim();
+    if (!input) return toast('请输入 Git 地址或本地路径');
+    const isGit = /^(https?:\/\/|git@|ssh:\/\/|git:\/\/|file:\/\/)/.test(input);
+    const body = {
+      name: $('inp-name').value.trim() || null,
+      branch: isGit ? ($('inp-branch').value.trim() || null) : null,
+    };
+    if (isGit) body.gitUrl = input; else body.path = input;
+    $('modal-mask').style.display = 'none';
+    toast('正在分析,请稍候…(大仓库可能需要几分钟)', 60000);
+    fetch('/api/projects', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(r => r.json()).then(async res => {
+      if (res.error) { toast('分析失败: ' + res.error, 5000); return; }
+      toast(`分析完成: ${res.files} 文件 / ${res.types} 类型 / ${res.methods} 方法${res.commit ? ' @' + res.commit : ''}`, 5000);
+      await loadProjects();
+      currentProject = res.project;
+      $('project-select').value = currentProject;
+      loadOverview(currentProject);
+    }).catch(e => toast('请求失败: ' + e.message));
+  });
 }
 
 // ==================== 图谱渲染 ====================

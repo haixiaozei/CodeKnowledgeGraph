@@ -23,12 +23,18 @@ public class GraphStoreService {
 
     @Transactional
     public Map<String, Object> replaceProject(AnalysisResult r) {
+        return replaceProject(r, r.rootPath(), null);
+    }
+
+    @Transactional
+    public Map<String, Object> replaceProject(AnalysisResult r, String source, String commit) {
         String p = r.projectName();
 
         // 清除该项目的旧数据
         neo4j.query("MATCH (n) WHERE n.project = $p DETACH DELETE n").bind(p).to("p").run();
-        neo4j.query("MERGE (x:Project {name: $p}) SET x.path = $path")
-                .bind(p).to("p").bind(r.rootPath()).to("path").run();
+        neo4j.query("MERGE (x:Project {name: $p}) SET x.path = $path, x.commit = $commit")
+                .bind(p).to("p").bind(source).to("path")
+                .bind(commit == null ? "" : commit).to("commit").run();
 
         // 包
         if (!r.packages().isEmpty()) {
@@ -126,7 +132,7 @@ public class GraphStoreService {
     public Collection<Map<String, Object>> listProjects() {
         return neo4j.query(
                         "MATCH (x:Project) OPTIONAL MATCH (t:Type {project: x.name}) " +
-                        "RETURN x.name AS name, x.path AS path, count(t) AS typeCount")
+                        "RETURN x.name AS name, x.path AS path, x.commit AS commit, count(t) AS typeCount")
                 .fetch().all();
     }
 }
