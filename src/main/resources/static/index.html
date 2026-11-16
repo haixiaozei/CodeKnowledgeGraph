@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>代码知识图谱</title>
+<script src="https://cdn.jsdelivr.net/npm/@antv/g6@4.8.24/dist/g6.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f6fa; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { background: #1e293b; color: #fff; padding: 10px 20px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+  header h1 { font-size: 17px; font-weight: 600; margin-right: 8px; }
+  header select, header input, header button {
+    padding: 6px 10px; border-radius: 6px; border: 1px solid #475569; background: #334155; color: #fff; font-size: 13px; outline: none;
+  }
+  header input { width: 320px; }
+  header button { cursor: pointer; background: #2563eb; border-color: #2563eb; }
+  header button:hover { background: #1d4ed8; }
+  header button.ghost { background: transparent; border-color: #475569; }
+  header button.ghost:hover { border-color: #93c5fd; color: #93c5fd; }
+  #main { flex: 1; display: flex; min-height: 0; }
+  #container { flex: 1; min-width: 0; position: relative; }
+  #panel { width: 380px; background: #fff; border-left: 1px solid #e2e8f0; overflow-y: auto; padding: 16px; flex-shrink: 0; }
+  #panel h2 { font-size: 15px; color: #1e293b; word-break: break-all; margin-bottom: 4px; }
+  #panel .pkg { font-size: 12px; color: #64748b; word-break: break-all; margin-bottom: 12px; }
+  #panel .close { position: sticky; float: right; top: 0; cursor: pointer; color: #94a3b8; font-size: 18px; }
+  .section { margin-bottom: 16px; }
+  .section h3 { font-size: 13px; color: #475569; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; margin-right: 4px; color: #fff; }
+  .badge.class { background: #2563eb; } .badge.interface { background: #059669; }
+  .badge.enum { background: #d97706; } .badge.record { background: #7c3aed; }
+  .member { font-size: 12px; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-family: ui-monospace, Menlo, monospace; display: flex; justify-content: space-between; }
+  .member:hover { background: #f1f5f9; }
+  .member .vis { color: #94a3b8; margin-right: 4px; }
+  .member .callers { color: #2563eb; font-size: 11px; }
+  .rel-item { font-size: 12px; padding: 3px 6px; cursor: pointer; border-radius: 4px; font-family: ui-monospace, Menlo, monospace; }
+  .rel-item:hover { background: #f1f5f9; }
+  .rel-item .k { font-size: 10px; color: #fff; border-radius: 3px; padding: 0 4px; margin-right: 6px; }
+  #tooltip { position: absolute; background: rgba(15,23,42,.92); color: #fff; font-size: 12px; padding: 6px 10px; border-radius: 6px; pointer-events: none; display: none; z-index: 10; max-width: 420px; word-break: break-all; }
+  #legend { position: absolute; left: 12px; bottom: 12px; background: rgba(255,255,255,.92); border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #475569; }
+  #legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+  .empty { color: #94a3b8; font-size: 13px; text-align: center; margin-top: 40px; }
+  #modal-mask { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 50; align-items: center; justify-content: center; }
+  #modal { background: #fff; border-radius: 12px; width: 640px; max-height: 70vh; overflow-y: auto; padding: 20px; }
+  #modal h3 { margin-bottom: 12px; font-size: 15px; }
+  .cycle-item { font-size: 12px; font-family: ui-monospace, Menlo, monospace; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
+  .cycle-item:hover { border-color: #2563eb; }
+  #search-results { position: absolute; top: 54px; left: 50%; transform: translateX(-38%); background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.12); max-height: 320px; overflow-y: auto; z-index: 20; display: none; width: 420px; }
+  #search-results .sr { padding: 8px 12px; font-size: 13px; cursor: pointer; font-family: ui-monospace, Menlo, monospace; border-bottom: 1px solid #f1f5f9; }
+  #search-results .sr:hover { background: #eff6ff; }
+  #search-results .sr .kind { color: #94a3b8; font-size: 11px; margin-right: 6px; }
+  #toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: #1e293b; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; z-index: 100; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 代码知识图谱</h1>
+  <select id="project-select"><option value="">选择项目…</option></select>
+  <input id="search-input" placeholder="搜索类名/方法名…" autocomplete="off">
+  <button id="btn-analyze" class="ghost">分析目录</button>
+  <button id="btn-cycles" class="ghost">循环依赖</button>
+  <button id="btn-refresh" class="ghost">刷新图谱</button>
+</header>
+<div id="main">
+  <div id="container">
+    <div id="tooltip"></div>
+    <div id="legend">
+      <div><span class="dot" style="background:#2563eb"></span>class</div>
+      <div><span class="dot" style="background:#059669"></span>interface</div>
+      <div><span class="dot" style="background:#d97706"></span>enum</div>
+      <div><span class="dot" style="background:#7c3aed"></span>record</div>
+    </div>
+  </div>
+  <div id="panel"><div class="empty">点击图中的节点查看类型详情</div></div>
+</div>
+<div id="search-results"></div>
+<div id="modal-mask"><div id="modal"></div></div>
+<div id="toast"></div>
+
+<script>
+const COLORS = { class: '#2563eb', interface: '#059669', enum: '#d97706', record: '#7c3aed' };
+const EDGE_COLORS = { EXTENDS: '#dc2626', IMPLEMENTS: '#059669', DEPENDS_ON: '#94a3b8', CALLS: '#2563eb' };
+let graph = null, currentProject = '', overviewCache = { nodes: [], edges: [] };
+
+const $ = id => document.getElementById(id);
+const toast = (msg, ms = 2500) => { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); };
+const api = (path) => fetch('/api' + path).then(r => r.json());
+
+// ==================== 初始化 ====================
+window.addEventListener('load', async () => {
+  initGraph();
+  await loadProjects();
+  $('search-input').addEventListener('input', onSearchInput);
+  $('btn-analyze').addEventListener('click', onAnalyze);
+  $('btn-cycles').addEventListener('click', onCycles);
+  $('btn-refresh').addEventListener('click', () => currentProject && loadOverview(currentProject));
+  $('project-select').addEventListener('change', e => e.target.value && loadOverview(e.target.value));
+});
+
+async function loadProjects() {
+  const projects = await api('/projects');
+  const sel = $('project-select');
+  sel.innerHTML = '<option value="">选择项目…</option>' +
+    projects.map(p => `<option value="${p.name}">${p.name} (${p.typeCount} 类型)</option>`).join('');
+  if (!currentProject && projects.length) { currentProject = projects[0].name; sel.value = currentProject; loadOverview(currentProject); }
+}
+
+function onAnalyze() {
+  const path = prompt('请输入要分析的 Java 项目根目录(绝对路径):\n例如: /Users/zhangxinxin/IdeaProjects/SomeProject');
+  if (!path) return;
+  toast('正在分析,请稍候…', 60000);
+  fetch('/api/projects', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path })
+  }).then(r => r.json()).then(async res => {
+    if (res.error) { toast('分析失败: ' + res.error, 4000); return; }
+    toast(`分析完成: ${res.files} 文件 / ${res.types} 类型 / ${res.methods} 方法 / ${res.callRelations} 调用关系`, 5000);
+    await loadProjects();
+    currentProject = res.project;
+    $('project-select').value = currentProject;
+    loadOverview(currentProject);
+  }).catch(e => toast('请求失败: ' + e.message));
+}
+
+// ==================== 图谱渲染 ====================
+function initGraph() {
+  graph = new G6.Graph({
+    container: 'container',
+    layout: { type: 'force', preventOverlap: true, nodeStrength: -60, linkDistance: 110, nodeSpacing: 30, alphaDecay: 0.028 },
+    defaultNode: { size: 34, style: { stroke: '#fff', lineWidth: 2 }, labelCfg: { position: 'bottom', style: { fontSize: 10, fill: '#475569' } } },
+    defaultEdge: { style: { endArrow: { path: G6.Arrow.triangle(7, 9, 0), fill: '#cbd5e1' }, lineWidth: 1 } },
+    nodeStateStyles: { highlight: { stroke: '#f59e0b', lineWidth: 3 }, dim: { opacity: 0.25 } },
+    modes: { default: ['drag-canvas', 'zoom-canvas', 'drag-node'] },
+  });
+  graph.on('node:click', e => showTypeDetail(e.item.getModel().id));
+  graph.on('node:mouseenter', e => {
+    const model = e.item.getModel(), tip = $('tooltip');
+    tip.innerHTML = `<b>${model.name}</b><br>${model.id}<br>${model.pkg || ''}`;
+    tip.style.display = 'block';
+  });
+  graph.on('node:mousemove', e => {
+    const tip = $('tooltip'), rect = $('container').getBoundingClientRect();
+    tip.style.left = (e.canvasX + 16 + rect.left > rect.width - 440 ? e.canvasX - 440 : e.canvasX + 16) + 'px';
+    tip.style.top = (e.canvasY + 14) + 'px';
+  });
+  graph.on('node:mouseleave', () => $('tooltip').style.display = 'none');
+  window.addEventListener('resize', () => graph && graph.changeSize($('container').scrollWidth, $('container').scrollHeight));
+}
+
+async function loadOverview(project) {
+  currentProject = project;
+  const data = await api(`/graph/overview?project=${encodeURIComponent(project)}`);
+  overviewCache = data;
+  const nodes = data.nodes.map(n => ({
+    id: n.id, label: n.name.length > 14 ? n.name.slice(0, 13) + '…' : n.name,
+    name: n.name, kind: n.kind, pkg: n.pkg, lines: n.lines,
+    size: Math.max(26, Math.min(52, 24 + Math.sqrt(n.lines || 1) * 2.2)),
+    color: COLORS[n.kind] || COLORS.class, style: { fill: COLORS[n.kind] || COLORS.class },
+  }));
+  const edges = data.edges.map((e, i) => ({
+    source: e.from, target: e.to,
+    style: { stroke: EDGE_COLORS[e.kind], lineWidth: e.kind === 'DEPENDS_ON' ? 0.7 : 1.6 },
+    kind: e.kind,
+  }));
+  graph.data({ nodes, edges });
+  graph.render();
+}
+
+function focusNode(qn) {
+  const node = graph.findById(qn);
+  if (!node) return;
+  graph.focusItem(node, true, { easing: 'easeCubic', duration: 400 });
+  graph.setItemState(node, 'highlight', true);
+  setTimeout(() => graph.setItemState(node, 'highlight', false), 2200);
+}
+
+function highlightSet(ids) {
+  const set = new Set(ids);
+  graph.getNodes().forEach(n => graph.setItemState(n, set.has(n.getID()) ? 'highlight' : 'dim', true));
+  graph.getEdges().forEach(e => graph.setItemState(e, 'dim', true));
+}
+
+function clearHighlight() {
+  graph.getNodes().forEach(n => graph.setItemState(n, 'highlight', false));
+  graph.getNodes().forEach(n => graph.setItemState(n, 'dim', false));
+  graph.getEdges().forEach(e => graph.setItemState(e, 'dim', false));
+}
+
+// ==================== 详情面板 ====================
+async function showTypeDetail(qn) {
+  const data = await api(`/types/${encodeURIComponent(qn)}?project=${encodeURIComponent(currentProject)}`);
+  if (data.error) { toast(data.error); return; }
+  const t = data.type;
+  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  let html = `
+    <span class="close" onclick="clearPanel()">✕</span>
+    <h2>${esc(t.simpleName)} <span class="badge ${t.kind}">${t.kind}</span>${t.isAbstract ? '<span class="badge class" style="background:#64748b">abstract</span>' : ''}</h2>
+    <div class="pkg">${esc(t.qualifiedName)} · ${t.lineCount} 行</div>
+    <div class="section">
+      <h3>⚡ 影响分析<button style="float:right;font-size:11px;padding:2px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer" onclick="runImpact('${esc(qn)}')">谁会被波及?</button></h3>
+      <div id="impact-result"></div>
+    </div>
+    <div class="section"><h3>方法 (${data.methods.length})</h3>
+      ${data.methods.map(m => `<div class="member" onclick="showMethodDetail('${esc(m.id)}')">
+        <span><span class="vis">${m.visibility === 'public' ? '+' : m.visibility === 'private' ? '−' : '~'}</span>${esc(m.signature)}</span>
+        <span class="callers" title="调用者数量">◀ ${m.callers}</span></div>`).join('') || '<div class="empty">无</div>'}
+    </div>
+    <div class="section"><h3>字段 (${data.fields.length})</h3>
+      ${data.fields.map(f => `<div class="member"><span><span class="vis">${f.visibility === 'public' ? '+' : f.visibility === 'private' ? '−' : '~'}</span>${esc(f.name)} : ${esc(f.type)}</span></div>`).join('') || '<div class="empty">无</div>'}
+    </div>
+    <div class="section"><h3>依赖 (${data.dependsOn.length})</h3>
+      ${data.dependsOn.map(d => `<div class="rel-item" onclick="focusNode('${esc(d.name)}');showTypeDetail('${esc(d.name)}')"><span class="k" style="background:${EDGE_COLORS[d.kind] || '#64748b'}">${d.kind}</span>${esc(d.name)}</div>`).join('') || '<div class="empty">无</div>'}
+    </div>
+    <div class="section"><h3>被依赖 (${data.dependedBy.length})</h3>
+      ${data.dependedBy.map(d => `<div class="rel-item" onclick="focusNode('${esc(d.name)}');showTypeDetail('${esc(d.name)}')"><span class="k" style="background:${EDGE_COLORS[d.kind] || '#64748b'}">${d.kind}</span>${esc(d.name)}</div>`).join('') || '<div class="empty">无</div>'}
+    </div>`;
+  $('panel').innerHTML = html;
+}
+
+window.clearPanel = () => $('panel').innerHTML = '<div class="empty">点击图中的节点查看类型详情</div>';
+
+window.runImpact = async qn => {
+  const list = await api(`/impact/${encodeURIComponent(qn)}?project=${encodeURIComponent(currentProject)}&depth=10`);
+  const el = $('impact-result');
+  if (!list.length) { el.innerHTML = '<div class="empty" style="margin-top:4px">✅ 没有类型依赖它,改动影响面为零</div>'; return; }
+  el.innerHTML = `<div style="font-size:12px;color:#dc2626;margin:6px 0">⚠ ${list.length} 个类型会被波及(点击可跳转):</div>` +
+    list.map(i => `<div class="rel-item" onclick="focusNode('${i.name.replace(/'/g, "\\'")}');showTypeDetail('${i.name.replace(/'/g, "\\'")}')">…${i.depth} 层 · ${i.name}</div>`).join('');
+  highlightSet([qn, ...list.map(i => i.name)]);
+  setTimeout(clearHighlight, 6000);
+};
+
+async function showMethodDetail(methodId) {
+  const [callers, callees] = await Promise.all([
+    api(`/methods/${encodeURIComponent(methodId)}/callers?project=${encodeURIComponent(currentProject)}`),
+    api(`/methods/${encodeURIComponent(methodId)}/callees?project=${encodeURIComponent(currentProject)}`),
+  ]);
+  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  $('modal').innerHTML = `<h3>${esc(methodId)}</h3>
+    <div class="section"><h3>调用者 (${callers.length})</h3>
+      ${callers.map(c => `<div class="member" onclick="focusNode('${esc(c.ownerType)}')">${esc(c.ownerSimpleName)} · ${esc(c.signature)}</div>`).join('') || '<div class="empty">无(可能是入口方法或外部调用)</div>'}
+    </div>
+    <div class="section"><h3>调用了 (${callees.length})</h3>
+      ${callees.map(c => `<div class="member" onclick="focusNode('${esc(c.ownerType)}')">${esc(c.ownerSimpleName)} · ${esc(c.signature)}</div>`).join('') || '<div class="empty">无</div>'}
+    </div>`;
+  $('modal-mask').style.display = 'flex';
+}
+window.showMethodDetail = showMethodDetail;
+$('modal-mask').addEventListener('click', e => { if (e.target.id === 'modal-mask') e.target.style.display = 'none'; });
+
+// ==================== 循环依赖 ====================
+async function onCycles() {
+  if (!currentProject) return toast('请先选择项目');
+  const cycles = await api(`/quality/cycles?project=${encodeURIComponent(currentProject)}`);
+  if (!cycles.length) {
+    $('modal').innerHTML = `<h3>✅ 未发现循环依赖</h3><div class="empty" style="margin:0">模块间依赖关系健康</div>`;
+  } else {
+    $('modal').innerHTML = `<h3>⚠ 发现 ${cycles.length} 处循环依赖(点击在图中高亮)</h3>` +
+      cycles.map(c => `<div class="cycle-item" onclick="highlightCycle(this)" data-nodes='${JSON.stringify(c.cycle)}'>${c.cycle.map(n => n.split('.').pop()).join(' → ')} → 自身</div>`).join('');
+  }
+  $('modal-mask').style.display = 'flex';
+}
+window.highlightCycle = el => {
+  const nodes = JSON.parse(el.dataset.nodes);
+  highlightSet(nodes);
+  setTimeout(clearHighlight, 6000);
+};
+
+// ==================== 搜索 ====================
+let searchTimer = null;
+function onSearchInput(e) {
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  if (!q || !currentProject) { $('search-results').style.display = 'none'; return; }
+  searchTimer = setTimeout(async () => {
+    const results = await api(`/search?project=${encodeURIComponent(currentProject)}&q=${encodeURIComponent(q)}`);
+    const box = $('search-results');
+    if (!results.length) { box.style.display = 'none'; return; }
+    box.innerHTML = results.map(r => `<div class="sr" data-name="${r.name}" data-mid="${r.methodId || ''}" data-kind="${r.kind}">
+      <span class="kind">${r.kind === 'type' ? '📁' : '⚙'}</span>${r.name}${r.detail ? ` <span class="kind">${r.detail}</span>` : ''}</div>`).join('');
+    box.style.display = 'block';
+    box.querySelectorAll('.sr').forEach(el => el.addEventListener('click', () => {
+      box.style.display = 'none';
+      if (el.dataset.kind === 'method') {
+        showMethodDetail(el.dataset.mid);
+        const owner = el.dataset.mid.replace(/\.[^.]+\(\d+\)$/, '');
+        focusNode(owner); showTypeDetail(owner);
+      } else { focusNode(el.dataset.name); showTypeDetail(el.dataset.name); }
+    }));
+  }, 300);
+}
+document.addEventListener('click', e => { if (!e.target.closest('#search-results') && !e.target.closest('#search-input')) $('search-results').style.display = 'none'; });
+</script>
+</body>
+</html>
