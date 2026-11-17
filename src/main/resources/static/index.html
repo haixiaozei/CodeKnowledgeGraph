@@ -36,7 +36,22 @@
   .rel-item:hover { background: #f1f5f9; }
   .rel-item .k { font-size: 10px; color: #fff; border-radius: 3px; padding: 0 4px; margin-right: 6px; }
   #tooltip { position: absolute; background: rgba(15,23,42,.92); color: #fff; font-size: 12px; padding: 6px 10px; border-radius: 6px; pointer-events: none; display: none; z-index: 10; max-width: 420px; word-break: break-all; }
-  #legend { position: absolute; left: 12px; bottom: 12px; background: rgba(255,255,255,.92); border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #475569; }
+  #legend { position: absolute; left: 12px; bottom: 12px; background: rgba(255,255,255,.92); border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #475569; z-index: 5; }
+  #pkg-panel { position: absolute; top: 12px; left: 12px; bottom: 12px; width: 260px; background: rgba(255,255,255,.96); border: 1px solid #e2e8f0; border-radius: 10px; display: none; flex-direction: column; z-index: 6; box-shadow: 0 4px 16px rgba(0,0,0,.06); }
+  #pkg-panel .pkg-head { padding: 10px 12px 8px; font-size: 13px; font-weight: 600; color: #1e293b; display: flex; justify-content: space-between; align-items: center; }
+  #pkg-panel .pkg-head .sub { font-weight: 400; color: #94a3b8; font-size: 11px; }
+  #pkg-panel .pkg-close { cursor: pointer; color: #94a3b8; font-size: 16px; }
+  #pkg-search { margin: 0 12px 8px; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; outline: none; }
+  #pkg-list { flex: 1; overflow-y: auto; padding: 0 6px; }
+  .pkg-item { display: flex; align-items: center; gap: 7px; padding: 4px 8px; font-size: 11px; font-family: ui-monospace, Menlo, monospace; border-radius: 4px; cursor: pointer; color: #334155; word-break: break-all; }
+  .pkg-item:hover { background: #f1f5f9; }
+  .pkg-item .cnt { margin-left: auto; color: #94a3b8; font-size: 10px; flex-shrink: 0; }
+  .pkg-actions { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid #f1f5f9; }
+  .pkg-actions button { flex: 1; padding: 5px; font-size: 11px; border: 1px solid #cbd5e1; background: #fff; border-radius: 5px; cursor: pointer; color: #475569; }
+  .pkg-actions button:hover { border-color: #2563eb; color: #2563eb; }
+  #mode-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: #1e293b; color: #fff; font-size: 12px; padding: 6px 16px; border-radius: 20px; display: none; z-index: 6; align-items: center; gap: 10px; }
+  #mode-banner b { color: #93c5fd; }
+  #mode-banner .reset { cursor: pointer; color: #fca5a5; }
   #legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
   .empty { color: #94a3b8; font-size: 13px; text-align: center; margin-top: 40px; }
   #modal-mask { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 50; align-items: center; justify-content: center; }
@@ -57,12 +72,23 @@
   <select id="project-select"><option value="">选择项目…</option></select>
   <input id="search-input" placeholder="搜索类名/方法名…" autocomplete="off">
   <button id="btn-analyze" class="ghost">分析项目</button>
+  <button id="btn-packages" class="ghost">按包过滤</button>
   <button id="btn-cycles" class="ghost">循环依赖</button>
   <button id="btn-refresh" class="ghost">刷新图谱</button>
 </header>
 <div id="main">
   <div id="container">
     <div id="tooltip"></div>
+    <div id="pkg-panel">
+      <div class="pkg-head">📦 按包过滤<span class="sub" id="pkg-count"></span><span class="pkg-close" id="pkg-close">✕</span></div>
+      <input id="pkg-search" placeholder="过滤包名…" autocomplete="off">
+      <div id="pkg-list"></div>
+      <div class="pkg-actions">
+        <button id="pkg-all">全选</button>
+        <button id="pkg-none">显示全部</button>
+      </div>
+    </div>
+    <div id="mode-banner"></div>
     <div id="legend">
       <div><span class="dot" style="background:#2563eb"></span>class</div>
       <div><span class="dot" style="background:#059669"></span>interface</div>
@@ -79,29 +105,113 @@
 <script>
 const COLORS = { class: '#2563eb', interface: '#059669', enum: '#d97706', record: '#7c3aed' };
 const EDGE_COLORS = { EXTENDS: '#dc2626', IMPLEMENTS: '#059669', DEPENDS_ON: '#94a3b8', CALLS: '#2563eb' };
-let graph = null, currentProject = '', overviewCache = { nodes: [], edges: [] };
+let graph = null, currentProject = '';
+let activePackages = new Set();          // 选中的包;空 = 显示全部
+let focusState = null;                   // {center, depth};null = 全量/包过滤模式
+let pkgList = [];                        // [{name, typeCount}]
 
 const $ = id => document.getElementById(id);
 const toast = (msg, ms = 2500) => { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); };
 const api = (path) => fetch('/api' + path).then(r => r.json());
+const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/'/g, '&#39;');
 
 // ==================== 初始化 ====================
 window.addEventListener('load', async () => {
-  initGraph();
   await loadProjects();
   $('search-input').addEventListener('input', onSearchInput);
   $('btn-analyze').addEventListener('click', onAnalyze);
   $('btn-cycles').addEventListener('click', onCycles);
-  $('btn-refresh').addEventListener('click', () => currentProject && loadOverview(currentProject));
-  $('project-select').addEventListener('change', e => e.target.value && loadOverview(e.target.value));
+  $('btn-refresh').addEventListener('click', () => currentProject && enterProjectView(currentProject));
+  $('project-select').addEventListener('change', e => e.target.value && enterProjectView(e.target.value));
+  $('btn-packages').addEventListener('click', () => {
+    const p = $('pkg-panel');
+    p.style.display = p.style.display === 'flex' ? 'none' : 'flex';
+  });
+  $('pkg-close').addEventListener('click', () => $('pkg-panel').style.display = 'none');
+  $('pkg-all').addEventListener('click', () => {
+    pkgList.forEach(p => activePackages.add(p.name));
+    renderPkgList(); refreshGraph();
+  });
+  $('pkg-none').addEventListener('click', () => {
+    activePackages.clear();
+    renderPkgList(); refreshGraph();
+  });
+  $('pkg-search').addEventListener('input', renderPkgList);
 });
+
+/** 切换/进入项目视图:重置过滤状态,加载包列表和全量图 */
+async function enterProjectView(project) {
+  currentProject = project;
+  activePackages.clear();
+  focusState = null;
+  $('pkg-panel').style.display = 'none';
+  await Promise.all([loadPackages(project), refreshGraph()]);
+}
+
+async function loadPackages(project) {
+  pkgList = await api(`/packages?project=${encodeURIComponent(project)}`);
+  renderPkgList();
+}
+
+function renderPkgList() {
+  const q = $('pkg-search').value.trim().toLowerCase();
+  const list = $('pkg-list');
+  list.innerHTML = pkgList
+    .filter(p => !q || p.name.toLowerCase().includes(q))
+    .map(p => `<label class="pkg-item"><input type="checkbox" data-pkg="${esc(p.name)}" ${activePackages.has(p.name) ? 'checked' : ''}>${esc(p.name)}<span class="cnt">${p.typeCount}</span></label>`)
+    .join('');
+  $('pkg-count').textContent = pkgList.length ? `(${activePackages.size}/${pkgList.length})` : '';
+  list.querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', () => {
+    cb.checked ? activePackages.add(cb.dataset.pkg) : activePackages.delete(cb.dataset.pkg);
+    $('pkg-count').textContent = `(${activePackages.size}/${pkgList.length})`;
+    refreshGraph();
+  }));
+}
+
+/** 根据当前状态(聚焦模式 / 包过滤)拉取数据并渲染 */
+async function refreshGraph() {
+  if (!currentProject) return;
+  let data;
+  if (focusState) {
+    data = await api(`/graph/focus?project=${encodeURIComponent(currentProject)}&qn=${encodeURIComponent(focusState.center)}&depth=${focusState.depth}`);
+  } else {
+    const qs = activePackages.size
+      ? `&packages=${[...activePackages].map(p => encodeURIComponent(p)).join('&packages=')}` : '';
+    data = await api(`/graph/overview?project=${encodeURIComponent(currentProject)}${qs}`);
+  }
+  renderGraph(data);
+  updateBanner();
+}
+
+function updateBanner() {
+  const b = $('mode-banner');
+  if (focusState) {
+    b.innerHTML = `🔍 聚焦视图: <b>${esc(focusState.center.split('.').pop())}</b> ${focusState.depth} 层 <span class="reset" onclick="exitFocus()">✕ 退出</span>`;
+    b.style.display = 'flex';
+  } else if (activePackages.size) {
+    b.innerHTML = `📦 包过滤: <b>${activePackages.size}</b> 个包,共 ${graph ? graph.getNodes().length : 0} 个类型 <span class="reset" onclick="exitPkgFilter()">✕ 清除</span>`;
+    b.style.display = 'flex';
+  } else {
+    b.style.display = 'none';
+  }
+}
+
+window.exitFocus = () => { focusState = null; refreshGraph(); };
+window.exitPkgFilter = () => { activePackages.clear(); renderPkgList(); refreshGraph(); };
+
+/** 进入聚焦模式(详情面板"以此为中心"按钮) */
+window.focusOn = async (qn, depth) => {
+  focusState = { center: qn, depth };
+  await refreshGraph();
+  focusNode(qn);
+};
 
 async function loadProjects() {
   const projects = await api('/projects');
   const sel = $('project-select');
   sel.innerHTML = '<option value="">选择项目…</option>' +
     projects.map(p => `<option value="${p.name}">${p.name} (${p.typeCount} 类型${p.commit ? ' @' + p.commit : ''})</option>`).join('');
-  if (!currentProject && projects.length) { currentProject = projects[0].name; sel.value = currentProject; loadOverview(currentProject); }
+  if (!currentProject && projects.length) { currentProject = projects[0].name; $('project-select').value = currentProject; enterProjectView(currentProject); }
 }
 
 function onAnalyze() {
@@ -150,21 +260,44 @@ function onAnalyze() {
       await loadProjects();
       currentProject = res.project;
       $('project-select').value = currentProject;
-      loadOverview(currentProject);
+      enterProjectView(currentProject);
     }).catch(e => toast('请求失败: ' + e.message));
   });
 }
 
 // ==================== 图谱渲染 ====================
-function initGraph() {
+function createGraph(nodes, edges) {
+  if (graph) { graph.destroy(); graph = null; }
+  const big = nodes.length > 600;
+  const layout = big
+    ? { type: 'forceAtlas2', preventOverlap: true, nodeStrength: 30, gravity: 8, linkDistance: 60 }
+    : { type: 'force', preventOverlap: true, nodeStrength: -60, linkDistance: 110, nodeSpacing: 30, alphaDecay: 0.028 };
   graph = new G6.Graph({
     container: 'container',
-    layout: { type: 'force', preventOverlap: true, nodeStrength: -60, linkDistance: 110, nodeSpacing: 30, alphaDecay: 0.028 },
-    defaultNode: { size: 34, style: { stroke: '#fff', lineWidth: 2 }, labelCfg: { position: 'bottom', style: { fontSize: 10, fill: '#475569' } } },
+    layout,
+    defaultNode: {
+      size: 34, style: { stroke: '#fff', lineWidth: 2 },
+      labelCfg: { position: 'bottom', style: { fontSize: 10, fill: '#475569' } },
+    },
     defaultEdge: { style: { endArrow: { path: G6.Arrow.triangle(7, 9, 0), fill: '#cbd5e1' }, lineWidth: 1 } },
     nodeStateStyles: { highlight: { stroke: '#f59e0b', lineWidth: 3 }, dim: { opacity: 0.25 } },
     modes: { default: ['drag-canvas', 'zoom-canvas', 'drag-node'] },
   });
+  graph.data({
+    nodes: nodes.map(n => ({
+      id: n.id,
+      label: big ? '' : (n.name.length > 14 ? n.name.slice(0, 13) + '…' : n.name),
+      name: n.name, kind: n.kind, pkg: n.pkg, lines: n.lines,
+      size: big ? 12 : Math.max(26, Math.min(52, 24 + Math.sqrt(n.lines || 1) * 2.2)),
+      color: COLORS[n.kind] || COLORS.class, style: { fill: COLORS[n.kind] || COLORS.class },
+    })),
+    edges: edges.map(e => ({
+      source: e.from, target: e.to,
+      style: { stroke: EDGE_COLORS[e.kind], lineWidth: e.kind === 'DEPENDS_ON' ? 0.7 : 1.6 },
+      kind: e.kind,
+    })),
+  });
+  graph.render();
   graph.on('node:click', e => showTypeDetail(e.item.getModel().id));
   graph.on('node:mouseenter', e => {
     const model = e.item.getModel(), tip = $('tooltip');
@@ -180,23 +313,8 @@ function initGraph() {
   window.addEventListener('resize', () => graph && graph.changeSize($('container').scrollWidth, $('container').scrollHeight));
 }
 
-async function loadOverview(project) {
-  currentProject = project;
-  const data = await api(`/graph/overview?project=${encodeURIComponent(project)}`);
-  overviewCache = data;
-  const nodes = data.nodes.map(n => ({
-    id: n.id, label: n.name.length > 14 ? n.name.slice(0, 13) + '…' : n.name,
-    name: n.name, kind: n.kind, pkg: n.pkg, lines: n.lines,
-    size: Math.max(26, Math.min(52, 24 + Math.sqrt(n.lines || 1) * 2.2)),
-    color: COLORS[n.kind] || COLORS.class, style: { fill: COLORS[n.kind] || COLORS.class },
-  }));
-  const edges = data.edges.map((e, i) => ({
-    source: e.from, target: e.to,
-    style: { stroke: EDGE_COLORS[e.kind], lineWidth: e.kind === 'DEPENDS_ON' ? 0.7 : 1.6 },
-    kind: e.kind,
-  }));
-  graph.data({ nodes, edges });
-  graph.render();
+function renderGraph(data) {
+  createGraph(data.nodes || [], data.edges || []);
 }
 
 function focusNode(qn) {
@@ -224,11 +342,20 @@ async function showTypeDetail(qn) {
   const data = await api(`/types/${encodeURIComponent(qn)}?project=${encodeURIComponent(currentProject)}`);
   if (data.error) { toast(data.error); return; }
   const t = data.type;
-  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
   let html = `
     <span class="close" onclick="clearPanel()">✕</span>
     <h2>${esc(t.simpleName)} <span class="badge ${t.kind}">${t.kind}</span>${t.isAbstract ? '<span class="badge class" style="background:#64748b">abstract</span>' : ''}</h2>
     <div class="pkg">${esc(t.qualifiedName)} · ${t.lineCount} 行</div>
+    <div class="section">
+      <h3>🧭 局部视图
+        <span style="float:right;font-size:11px">
+          <a style="color:#2563eb;cursor:pointer;text-decoration:underline" onclick="focusOn('${esc(qn)}',1)">1层</a> ·
+          <a style="color:#2563eb;cursor:pointer;text-decoration:underline" onclick="focusOn('${esc(qn)}',2)">2层</a> ·
+          <a style="color:#2563eb;cursor:pointer;text-decoration:underline" onclick="focusOn('${esc(qn)}',3)">3层</a>
+        </span>
+      </h3>
+      <div style="font-size:11px;color:#94a3b8">以此类型为中心,只显示 N 层关系内的邻居</div>
+    </div>
     <div class="section">
       <h3>⚡ 影响分析<button style="float:right;font-size:11px;padding:2px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer" onclick="runImpact('${esc(qn)}')">谁会被波及?</button></h3>
       <div id="impact-result"></div>
@@ -267,7 +394,6 @@ async function showMethodDetail(methodId) {
     api(`/methods/${encodeURIComponent(methodId)}/callers?project=${encodeURIComponent(currentProject)}`),
     api(`/methods/${encodeURIComponent(methodId)}/callees?project=${encodeURIComponent(currentProject)}`),
   ]);
-  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
   $('modal').innerHTML = `<h3>${esc(methodId)}</h3>
     <div class="section"><h3>调用者 (${callers.length})</h3>
       ${callers.map(c => `<div class="member" onclick="focusNode('${esc(c.ownerType)}')">${esc(c.ownerSimpleName)} · ${esc(c.signature)}</div>`).join('') || '<div class="empty">无(可能是入口方法或外部调用)</div>'}

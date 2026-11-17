@@ -23,20 +23,65 @@ public class GraphQueryService {
         this.neo4j = neo4j;
     }
 
-    /** 可视化概览:类型节点 + 类型间关系 */
+    /** 可视化概览:类型节点 + 类型间关系,可按包过滤 */
     public Map<String, Object> overview(String project) {
-        Collection<Map<String, Object>> nodes = neo4j.query("""
+        return overview(project, List.of());
+    }
+
+    public Map<String, Object> overview(String project, List<String> packages) {
+        boolean hasFilter = packages != null && !packages.isEmpty();
+        String nodeQuery = """
                 MATCH (t:Type {project: $p})
+                """ + (hasFilter ? "WHERE t.packageName IN $pkgs " : "") + """
                 RETURN t.qualifiedName AS id, t.simpleName AS name, t.kind AS kind,
                        t.packageName AS pkg, t.lineCount AS lines
-                """).bind(project).to("p").fetch().all();
+                """;
+        String edgeQuery = """
+                MATCH (a:Type {project: $p})-[r:EXTENDS|IMPLEMENTS|DEPENDS_ON]->(b:Type {project: $p})
+                """ + (hasFilter ? "WHERE a.packageName IN $pkgs AND b.packageName IN $pkgs " : "") + """
+                RETURN a.qualifiedName AS from, b.qualifiedName AS to, type(r) AS kind
+                """;
+
+        var nodeBind = neo4j.query(nodeQuery).bind(project).to("p");
+        if (hasFilter) nodeBind = nodeBind.bind(packages).to("pkgs");
+        Collection<Map<String, Object>> nodes = nodeBind.fetch().all();
+
+        var edgeBind = neo4j.query(edgeQuery).bind(project).to("p");
+        if (hasFilter) edgeBind = edgeBind.bind(packages).to("pkgs");
+        Collection<Map<String, Object>> edges = edgeBind.fetch().all();
+
+        return Map.of("nodes", List.copyOf(nodes), "edges", List.copyOf(edges));
+    }
+
+    /** 局部视图:以某类型为中心,depth 层关系内的邻居子图 */
+    public Map<String, Object> focus(String project, String qn, int depth) {
+        int d = Math.max(1, Math.min(depth, 3));
+        Collection<Map<String, Object>> nodes = neo4j.query("""
+                MATCH path = (c:Type {project: $p, qualifiedName: $qn})-[:DEPENDS_ON|EXTENDS|IMPLEMENTS*0..%d]-(x:Type)
+                WHERE x.project = $p
+                RETURN DISTINCT x.qualifiedName AS id, x.simpleName AS name, x.kind AS kind,
+                       x.packageName AS pkg, x.lineCount AS lines
+                """.formatted(d)).bindAll(Map.of("p", project, "qn", qn)).fetch().all();
+
+        List<String> ids = nodes.stream().map(n -> (String) n.get("id")).toList();
+        if (ids.isEmpty()) return Map.of("nodes", List.of(), "edges", List.of());
 
         Collection<Map<String, Object>> edges = neo4j.query("""
                 MATCH (a:Type {project: $p})-[r:EXTENDS|IMPLEMENTS|DEPENDS_ON]->(b:Type {project: $p})
+                WHERE a.qualifiedName IN $ids AND b.qualifiedName IN $ids
                 RETURN a.qualifiedName AS from, b.qualifiedName AS to, type(r) AS kind
-                """).bind(project).to("p").fetch().all();
+                """).bindAll(Map.of("p", project, "ids", ids)).fetch().all();
 
         return Map.of("nodes", List.copyOf(nodes), "edges", List.copyOf(edges));
+    }
+
+    /** 项目下所有包及类型数量 */
+    public List<Map<String, Object>> packages(String project) {
+        return List.copyOf(neo4j.query("""
+                MATCH (p:Package {project: $p})-[:CONTAINS]->(t:Type)
+                RETURN p.name AS name, count(t) AS typeCount
+                ORDER BY name
+                """).bind(project).to("p").fetch().all());
     }
 
     /** 类型详情:方法、字段、依赖、被依赖、直接调用者方法数 */

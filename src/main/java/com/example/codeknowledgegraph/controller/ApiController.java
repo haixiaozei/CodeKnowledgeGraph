@@ -91,8 +91,21 @@ public class ApiController {
     // ==================== 图谱查询 ====================
 
     @GetMapping("/graph/overview")
-    public Map<String, Object> overview(@RequestParam String project) {
-        return query.overview(project);
+    public Map<String, Object> overview(@RequestParam String project,
+                                         @RequestParam(required = false) List<String> packages) {
+        return query.overview(project, packages);
+    }
+
+    @GetMapping("/graph/focus")
+    public Map<String, Object> focus(@RequestParam String project,
+                                      @RequestParam String qn,
+                                      @RequestParam(defaultValue = "2") int depth) {
+        return query.focus(project, qn, depth);
+    }
+
+    @GetMapping("/packages")
+    public List<Map<String, Object>> packages(@RequestParam String project) {
+        return query.packages(project);
     }
 
     @GetMapping("/types/{qualifiedName}")
