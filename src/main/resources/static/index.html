@@ -52,6 +52,9 @@
   .rel-item { font-size: 12px; padding: 4px 8px; cursor: pointer; border-radius: 6px; font-family: var(--mono); border: 1px solid transparent; transition: background .12s, border-color .12s; }
   .rel-item:hover { background: rgba(56,189,248,.08); border-color: rgba(56,189,248,.2); }
   .rel-item .k { font-size: 10px; color: #fff; border-radius: 3px; padding: 0 4px; margin-right: 6px; }
+  .http-badge { display: inline-block; font-size: 10px; padding: 0 5px; border-radius: 3px; margin-left: 6px; background: #7c3aed; color: #fff; font-family: var(--mono); }
+  .http-badge.GET { background: #10b981; } .http-badge.POST { background: #f59e0b; }
+  .http-badge.PUT { background: #3b82f6; } .http-badge.DELETE { background: #ef4444; }
   #tooltip { position: absolute; background: rgba(13,21,38,.95); border: 1px solid var(--border); color: var(--text); font-size: 12px; padding: 8px 12px; border-radius: 8px; pointer-events: none; display: none; z-index: 10; max-width: 420px; word-break: break-all; box-shadow: 0 8px 24px rgba(0,0,0,.4); font-family: var(--mono); }
 
   /* ---------- 图例 / 浮层 ---------- */
@@ -107,6 +110,7 @@
   <button id="btn-delete" class="ghost">删除项目</button>
   <button id="btn-packages" class="ghost">按包过滤</button>
   <button id="btn-cycles" class="ghost">循环依赖</button>
+  <button id="btn-deadcode" class="ghost">死代码</button>
   <button id="btn-refresh" class="ghost">刷新图谱</button>
 </header>
 <div id="main">
@@ -157,6 +161,7 @@ window.addEventListener('load', async () => {
   $('btn-analyze').addEventListener('click', onAnalyze);
   $('btn-delete').addEventListener('click', onDeleteProject);
   $('btn-cycles').addEventListener('click', onCycles);
+  $('btn-deadcode').addEventListener('click', onDeadCode);
   $('btn-refresh').addEventListener('click', () => currentProject && enterProjectView(currentProject));
   $('project-select').addEventListener('change', e => e.target.value && enterProjectView(e.target.value));
   $('btn-packages').addEventListener('click', () => {
@@ -428,7 +433,7 @@ async function showTypeDetail(qn) {
     </div>
     <div class="section"><h3>方法 (${data.methods.length})</h3>
       ${data.methods.map(m => `<div class="member" onclick="showMethodDetail('${esc(m.id)}')">
-        <span><span class="vis">${m.visibility === 'public' ? '+' : m.visibility === 'private' ? '−' : '~'}</span>${esc(m.signature)}</span>
+        <span><span class="vis">${m.visibility === 'public' ? '+' : m.visibility === 'private' ? '−' : '~'}</span>${esc(m.signature)}${m.httpPath ? `<span class="http-badge ${m.httpMethod}" title="${esc(m.httpMethod + ' ' + m.httpPath)}">${m.httpMethod}</span>` : ''}</span>
         <span class="callers" title="调用者数量">◀ ${m.callers}</span></div>`).join('') || '<div class="empty">无</div>'}
     </div>
     <div class="section"><h3>字段 (${data.fields.length})</h3>
@@ -471,6 +476,22 @@ async function showMethodDetail(methodId) {
 }
 window.showMethodDetail = showMethodDetail;
 $('modal-mask').addEventListener('click', e => { if (e.target.id === 'modal-mask') e.target.style.display = 'none'; });
+
+// ==================== 死代码检测(F4.1) ====================
+async function onDeadCode() {
+  if (!currentProject) return toast('请先选择项目');
+  const list = await api(`/quality/dead-code?project=${encodeURIComponent(currentProject)}`);
+  if (!list.length) {
+    $('modal').innerHTML = `<h3>✅ 未发现死代码</h3><div class="empty" style="margin:0">所有方法都有调用者或属于入口(端点/main/接口/Override 等)</div>`;
+  } else {
+    $('modal').innerHTML = `<h3>🔍 发现 ${list.length} 个疑似死代码方法(点击跳转到所属类)</h3>` +
+      `<div style="font-size:11px;color:var(--muted);margin-bottom:10px">规则: 无调用者且非入口(构造器/main/REST端点/接口声明/Override、Test 系列注解)。反射调用无法识别,请人工复核。</div>` +
+      list.map(m => `<div class="cycle-item" onclick="focusNode('${esc(m.ownerType)}');showTypeDetail('${esc(m.ownerType)}')">
+        <span style="color:${m.visibility === 'private' ? '#f87171' : '#fbbf24'}">${m.visibility}</span>
+        ${esc(m.ownerSimpleName)} · ${esc(m.signature)} <span style="color:var(--muted)">@行 ${m.startLine}</span></div>`).join('');
+  }
+  $('modal-mask').style.display = 'flex';
+}
 
 // ==================== 循环依赖 ====================
 async function onCycles() {
