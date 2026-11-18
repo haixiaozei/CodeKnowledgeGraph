@@ -5,6 +5,7 @@ import com.example.codeknowledgegraph.parser.model.AnalysisResult;
 import com.example.codeknowledgegraph.service.GitCloneService;
 import com.example.codeknowledgegraph.service.GraphQueryService;
 import com.example.codeknowledgegraph.service.GraphStoreService;
+import com.example.codeknowledgegraph.service.ProjectAnalysisService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -29,18 +30,21 @@ public class ApiController {
     private final GraphStoreService store;
     private final GraphQueryService query;
     private final GitCloneService gitClone;
+    private final ProjectAnalysisService projectAnalysis;
 
     public ApiController(CodeAnalyzer analyzer, GraphStoreService store,
-                         GraphQueryService query, GitCloneService gitClone) {
+                         GraphQueryService query, GitCloneService gitClone,
+                         ProjectAnalysisService projectAnalysis) {
         this.analyzer = analyzer;
         this.store = store;
         this.query = query;
         this.gitClone = gitClone;
+        this.projectAnalysis = projectAnalysis;
     }
 
     // ==================== 项目管理 ====================
 
-    public record AnalyzeRequest(String name, String path, String gitUrl, String branch) {}
+    public record AnalyzeRequest(String name, String path, String gitUrl, String branch, Boolean full) {}
 
     @PostMapping("/projects")
     public ResponseEntity<?> analyzeProject(@RequestBody AnalyzeRequest request) throws Exception {
@@ -70,9 +74,8 @@ public class ApiController {
         String name = (request.name() == null || request.name().isBlank())
                 ? root.getFileName().toString() : request.name().trim();
 
-        AnalysisResult result = analyzer.analyze(name, root);
-        Map<String, Object> stats = store.replaceProject(result, root.toAbsolutePath().toString(), null);
-        return ResponseEntity.ok(stats);
+        // F3.5: full=true 强制全量;默认自动选择全量/增量
+        return ResponseEntity.ok(projectAnalysis.analyze(name, root, Boolean.TRUE.equals(request.full())));
     }
 
     @GetMapping("/projects")

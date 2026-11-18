@@ -1,7 +1,5 @@
 package com.example.codeknowledgegraph.service;
 
-import com.example.codeknowledgegraph.parser.CodeAnalyzer;
-import com.example.codeknowledgegraph.parser.model.AnalysisResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -20,14 +18,14 @@ import java.util.concurrent.Executors;
  * 大仓库分析是分钟级操作,超出 MCP 工具调用的合理等待时间,改为:
  * analyze 提交任务立即返回 jobId -> 后台线程执行 -> 通过 get_analysis_status 轮询结果。
  * 单线程串行执行,避免多个大仓库分析互相拖垮 Neo4j 写入。
+ * F3.5: 支持强制全量(forceFull)开关,由分析编排器决定全量/增量。
  */
 @Service
 public class AnalysisJobService {
 
     private static final Logger log = LoggerFactory.getLogger(AnalysisJobService.class);
 
-    private final CodeAnalyzer analyzer;
-    private final GraphStoreService store;
+    private final ProjectAnalysisService projectAnalysis;
     /** 单线程串行:同一时间只跑一个分析任务 */
     private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "analysis-job");
@@ -37,16 +35,15 @@ public class AnalysisJobService {
     private final Map<String, JobState> jobs = new ConcurrentHashMap<>();
 
     /** 任务状态快照:PENDING -> RUNNING -> DONE / FAILED */
-    public record JobState(String jobId, String name, String path, String status,
-                           String submittedAt, Map<String, Object> result, String error) {}
+    public record JobState(String jobId, String name, String path, boolean forceFull,
+                           String status, String submittedAt, Map<String, Object> result, String error) {}
 
-    public AnalysisJobService(CodeAnalyzer analyzer, GraphStoreService store) {
-        this.analyzer = analyzer;
-        this.store = store;
+    public AnalysisJobService(ProjectAnalysisService projectAnalysis) {
+        this.projectAnalysis = projectAnalysis;
     }
 
     /** 提交本地路径分析任务,校验通过后立即返回 jobId */
-    public Map<String, Object> submit(String name, String path) {
+    public Map<String, Object> submit(String name, String path, boolean forceFull) {
         if (path == null || path.isBlank()) {
             return Map.of("error", "请提供本地目录绝对路径");
         }
@@ -56,7 +53,7 @@ public class AnalysisJobService {
         }
         String projectName = (name == null || name.isBlank()) ? root.getFileName().toString() : name.trim();
         String jobId = UUID.randomUUID().toString().substring(0, 8);
-        JobState job = new JobState(jobId, projectName, root.toAbsolutePath().toString(),
+        JobState job = new JobState(jobId, projectName, root.toAbsolutePath().toString(), forceFull,
                 "PENDING", Instant.now().toString(), null, null);
         jobs.put(jobId, job);
         executor.submit(() -> runJob(jobId, job));
@@ -78,16 +75,15 @@ public class AnalysisJobService {
     }
 
     private void runJob(String jobId, JobState job) {
-        jobs.put(jobId, new JobState(job.jobId(), job.name(), job.path(), "RUNNING",
+        jobs.put(jobId, new JobState(job.jobId(), job.name(), job.path(), job.forceFull(), "RUNNING",
                 job.submittedAt(), null, null));
         try {
-            AnalysisResult result = analyzer.analyze(job.name(), Path.of(job.path()));
-            Map<String, Object> stats = store.replaceProject(result, job.path(), null);
-            jobs.put(jobId, new JobState(job.jobId(), job.name(), job.path(), "DONE",
+            Map<String, Object> stats = projectAnalysis.analyze(job.name(), Path.of(job.path()), job.forceFull());
+            jobs.put(jobId, new JobState(job.jobId(), job.name(), job.path(), job.forceFull(), "DONE",
                     job.submittedAt(), stats, null));
             log.info("分析任务 {} 完成: {}", jobId, stats);
         } catch (Exception e) {
-            jobs.put(jobId, new JobState(job.jobId(), job.name(), job.path(), "FAILED",
+            jobs.put(jobId, new JobState(job.jobId(), job.name(), job.path(), job.forceFull(), "FAILED",
                     job.submittedAt(), null, e.getMessage()));
             log.error("分析任务 {} 失败", jobId, e);
         }
