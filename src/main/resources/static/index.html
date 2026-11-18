@@ -5,65 +5,97 @@
 <title>代码知识图谱</title>
 <script src="https://cdn.jsdelivr.net/npm/@antv/g6@4.8.24/dist/g6.min.js"></script>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f6fa; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-  header { background: #1e293b; color: #fff; padding: 10px 20px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-  header h1 { font-size: 17px; font-weight: 600; margin-right: 8px; }
-  header select, header input, header button {
-    padding: 6px 10px; border-radius: 6px; border: 1px solid #475569; background: #334155; color: #fff; font-size: 13px; outline: none;
+  :root {
+    --bg: #0b1220; --panel: #101a2e; --panel-2: #16223c; --border: #24314f; --border-soft: #1c2946;
+    --text: #e2e8f0; --muted: #8ea0bd; --accent: #38bdf8; --accent-dim: #7dd3fc;
+    --danger: #f87171; --mono: ui-monospace, Menlo, monospace;
   }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #2b3a5c; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a4d78; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ---------- 顶栏 ---------- */
+  header { background: rgba(13,21,38,.88); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border-soft); padding: 10px 20px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  header h1 { font-size: 16px; font-weight: 700; margin-right: 6px; background: linear-gradient(90deg, #7dd3fc, #a5b4fc); -webkit-background-clip: text; background-clip: text; color: transparent; letter-spacing: .3px; white-space: nowrap; }
+  header select, header input { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 13px; outline: none; transition: border-color .15s, box-shadow .15s; }
+  header select:focus, header input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56,189,248,.15); }
+  header select option { background: var(--panel); color: var(--text); }
   header input { width: 320px; }
-  header button { cursor: pointer; background: #2563eb; border-color: #2563eb; }
-  header button:hover { background: #1d4ed8; }
-  header button.ghost { background: transparent; border-color: #475569; }
-  header button.ghost:hover { border-color: #93c5fd; color: #93c5fd; }
-  #main { flex: 1; display: flex; min-height: 0; }
-  #container { flex: 1; min-width: 0; position: relative; }
-  #panel { width: 380px; background: #fff; border-left: 1px solid #e2e8f0; overflow-y: auto; padding: 16px; flex-shrink: 0; }
-  #panel h2 { font-size: 15px; color: #1e293b; word-break: break-all; margin-bottom: 4px; }
-  #panel .pkg { font-size: 12px; color: #64748b; word-break: break-all; margin-bottom: 12px; }
-  #panel .close { position: sticky; float: right; top: 0; cursor: pointer; color: #94a3b8; font-size: 18px; }
+  header button { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: #b6c4dc; font-size: 13px; cursor: pointer; transition: border-color .15s, color .15s, transform .1s, box-shadow .15s; }
+  header button:hover { border-color: var(--accent); color: var(--accent-dim); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(56,189,248,.12); }
+  header button:active { transform: translateY(0); }
+
+  /* ---------- 主区域 ---------- */
+  #main { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+  #container { flex: 1; min-width: 0; position: relative; background: radial-gradient(circle at 1px 1px, rgba(120,140,180,.13) 1px, transparent 0) 0 0 / 24px 24px, var(--bg); }
+  #panel { width: 380px; background: var(--panel); border-left: 1px solid var(--border-soft); overflow-y: auto; padding: 16px; flex-shrink: 0; transition: margin-right .28s ease; }
+  #panel.collapsed { margin-right: -381px; }
+  #panel-toggle { position: absolute; top: 12px; right: 12px; z-index: 7; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; font-size: 15px; background: rgba(13,21,38,.85); backdrop-filter: blur(8px); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; color: #b6c4dc; transition: border-color .15s, color .15s; }
+  #panel-toggle:hover { border-color: var(--accent); color: var(--accent-dim); }
+  #panel-toggle.active { border-color: var(--accent); color: var(--accent-dim); background: rgba(56,189,248,.12); }
+  #panel h2 { font-size: 15px; color: var(--text); word-break: break-all; margin-bottom: 4px; }
+  #panel .pkg { font-size: 12px; color: var(--muted); word-break: break-all; margin-bottom: 12px; font-family: var(--mono); }
+  #panel .close { position: sticky; float: right; top: 0; cursor: pointer; color: var(--muted); font-size: 18px; }
+  #panel .close:hover { color: var(--text); }
   .section { margin-bottom: 16px; }
-  .section h3 { font-size: 13px; color: #475569; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px; }
-  .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; margin-right: 4px; color: #fff; }
-  .badge.class { background: #2563eb; } .badge.interface { background: #059669; }
-  .badge.enum { background: #d97706; } .badge.record { background: #7c3aed; }
-  .member { font-size: 12px; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-family: ui-monospace, Menlo, monospace; display: flex; justify-content: space-between; }
-  .member:hover { background: #f1f5f9; }
-  .member .vis { color: #94a3b8; margin-right: 4px; }
-  .member .callers { color: #2563eb; font-size: 11px; }
-  .rel-item { font-size: 12px; padding: 3px 6px; cursor: pointer; border-radius: 4px; font-family: ui-monospace, Menlo, monospace; }
-  .rel-item:hover { background: #f1f5f9; }
+  .section h3 { font-size: 13px; color: #a9b8d4; border-bottom: 1px solid var(--border-soft); padding-bottom: 4px; margin-bottom: 8px; font-weight: 600; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; margin-right: 4px; color: #fff; vertical-align: 1px; }
+  .badge.class { background: #3b82f6; } .badge.interface { background: #10b981; }
+  .badge.enum { background: #f59e0b; } .badge.record { background: #8b5cf6; }
+  .member { font-size: 12px; padding: 5px 8px; border-radius: 6px; cursor: pointer; font-family: var(--mono); display: flex; justify-content: space-between; border: 1px solid transparent; transition: background .12s, border-color .12s; }
+  .member:hover { background: rgba(56,189,248,.08); border-color: rgba(56,189,248,.2); }
+  .member .vis { color: var(--muted); margin-right: 4px; }
+  .member .callers { color: var(--accent); font-size: 11px; white-space: nowrap; }
+  .rel-item { font-size: 12px; padding: 4px 8px; cursor: pointer; border-radius: 6px; font-family: var(--mono); border: 1px solid transparent; transition: background .12s, border-color .12s; }
+  .rel-item:hover { background: rgba(56,189,248,.08); border-color: rgba(56,189,248,.2); }
   .rel-item .k { font-size: 10px; color: #fff; border-radius: 3px; padding: 0 4px; margin-right: 6px; }
-  #tooltip { position: absolute; background: rgba(15,23,42,.92); color: #fff; font-size: 12px; padding: 6px 10px; border-radius: 6px; pointer-events: none; display: none; z-index: 10; max-width: 420px; word-break: break-all; }
-  #legend { position: absolute; left: 12px; bottom: 12px; background: rgba(255,255,255,.92); border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #475569; z-index: 5; }
-  #pkg-panel { position: absolute; top: 12px; left: 12px; bottom: 12px; width: 260px; background: rgba(255,255,255,.96); border: 1px solid #e2e8f0; border-radius: 10px; display: none; flex-direction: column; z-index: 6; box-shadow: 0 4px 16px rgba(0,0,0,.06); }
-  #pkg-panel .pkg-head { padding: 10px 12px 8px; font-size: 13px; font-weight: 600; color: #1e293b; display: flex; justify-content: space-between; align-items: center; }
-  #pkg-panel .pkg-head .sub { font-weight: 400; color: #94a3b8; font-size: 11px; }
-  #pkg-panel .pkg-close { cursor: pointer; color: #94a3b8; font-size: 16px; }
-  #pkg-search { margin: 0 12px 8px; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; outline: none; }
+  #tooltip { position: absolute; background: rgba(13,21,38,.95); border: 1px solid var(--border); color: var(--text); font-size: 12px; padding: 8px 12px; border-radius: 8px; pointer-events: none; display: none; z-index: 10; max-width: 420px; word-break: break-all; box-shadow: 0 8px 24px rgba(0,0,0,.4); font-family: var(--mono); }
+
+  /* ---------- 图例 / 浮层 ---------- */
+  #legend { position: absolute; left: 12px; bottom: 12px; background: rgba(13,21,38,.85); backdrop-filter: blur(8px); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: #a9b8d4; z-index: 5; display: flex; gap: 14px; }
+  #legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+  #pkg-panel { position: absolute; top: 12px; left: 12px; bottom: 12px; width: 260px; background: rgba(16,26,46,.96); backdrop-filter: blur(10px); border: 1px solid var(--border); border-radius: 12px; display: none; flex-direction: column; z-index: 6; box-shadow: 0 8px 32px rgba(0,0,0,.35); }
+  #pkg-panel .pkg-head { padding: 10px 12px 8px; font-size: 13px; font-weight: 600; color: var(--text); display: flex; justify-content: space-between; align-items: center; }
+  #pkg-panel .pkg-head .sub { font-weight: 400; color: var(--muted); font-size: 11px; }
+  #pkg-panel .pkg-close { cursor: pointer; color: var(--muted); font-size: 16px; }
+  #pkg-panel .pkg-close:hover { color: var(--text); }
+  #pkg-search { margin: 0 12px 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; outline: none; background: var(--panel-2); color: var(--text); }
+  #pkg-search:focus { border-color: var(--accent); }
   #pkg-list { flex: 1; overflow-y: auto; padding: 0 6px; }
-  .pkg-item { display: flex; align-items: center; gap: 7px; padding: 4px 8px; font-size: 11px; font-family: ui-monospace, Menlo, monospace; border-radius: 4px; cursor: pointer; color: #334155; word-break: break-all; }
-  .pkg-item:hover { background: #f1f5f9; }
-  .pkg-item .cnt { margin-left: auto; color: #94a3b8; font-size: 10px; flex-shrink: 0; }
-  .pkg-actions { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid #f1f5f9; }
-  .pkg-actions button { flex: 1; padding: 5px; font-size: 11px; border: 1px solid #cbd5e1; background: #fff; border-radius: 5px; cursor: pointer; color: #475569; }
-  .pkg-actions button:hover { border-color: #2563eb; color: #2563eb; }
-  #mode-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: #1e293b; color: #fff; font-size: 12px; padding: 6px 16px; border-radius: 20px; display: none; z-index: 6; align-items: center; gap: 10px; }
-  #mode-banner b { color: #93c5fd; }
-  #mode-banner .reset { cursor: pointer; color: #fca5a5; }
-  #legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
-  .empty { color: #94a3b8; font-size: 13px; text-align: center; margin-top: 40px; }
-  #modal-mask { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 50; align-items: center; justify-content: center; }
-  #modal { background: #fff; border-radius: 12px; width: 640px; max-height: 70vh; overflow-y: auto; padding: 20px; }
-  #modal h3 { margin-bottom: 12px; font-size: 15px; }
-  .cycle-item { font-size: 12px; font-family: ui-monospace, Menlo, monospace; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
-  .cycle-item:hover { border-color: #2563eb; }
-  #search-results { position: absolute; top: 54px; left: 50%; transform: translateX(-38%); background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.12); max-height: 320px; overflow-y: auto; z-index: 20; display: none; width: 420px; }
-  #search-results .sr { padding: 8px 12px; font-size: 13px; cursor: pointer; font-family: ui-monospace, Menlo, monospace; border-bottom: 1px solid #f1f5f9; }
-  #search-results .sr:hover { background: #eff6ff; }
-  #search-results .sr .kind { color: #94a3b8; font-size: 11px; margin-right: 6px; }
-  #toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: #1e293b; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; z-index: 100; display: none; }
+  .pkg-item { display: flex; align-items: center; gap: 7px; padding: 4px 8px; font-size: 11px; font-family: var(--mono); border-radius: 6px; cursor: pointer; color: #b6c4dc; word-break: break-all; }
+  .pkg-item:hover { background: rgba(56,189,248,.08); }
+  .pkg-item .cnt { margin-left: auto; color: var(--muted); font-size: 10px; flex-shrink: 0; }
+  .pkg-actions { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border-soft); }
+  .pkg-actions button { flex: 1; padding: 5px; font-size: 11px; border: 1px solid var(--border); background: var(--panel-2); border-radius: 6px; cursor: pointer; color: #b6c4dc; transition: border-color .15s, color .15s; }
+  .pkg-actions button:hover { border-color: var(--accent); color: var(--accent-dim); }
+  #mode-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: rgba(13,21,38,.92); backdrop-filter: blur(8px); border: 1px solid var(--border); color: var(--text); font-size: 12px; padding: 6px 16px; border-radius: 20px; display: none; z-index: 6; align-items: center; gap: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
+  #mode-banner b { color: var(--accent-dim); }
+  #mode-banner .reset { cursor: pointer; color: var(--danger); }
+  #mode-banner .reset:hover { color: #fca5a5; }
+  .empty { color: var(--muted); font-size: 13px; text-align: center; margin-top: 40px; }
+
+  /* ---------- 加载态 ---------- */
+  #loading { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 12px; background: rgba(11,18,32,.5); backdrop-filter: blur(2px); z-index: 8; }
+  #loading .spin { width: 36px; height: 36px; border: 3px solid rgba(148,163,184,.2); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+  #loading .txt { font-size: 13px; color: var(--muted); letter-spacing: .5px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- 弹窗 / 搜索 / 提示 ---------- */
+  #modal-mask { display: none; position: fixed; inset: 0; background: rgba(4,8,18,.6); backdrop-filter: blur(4px); z-index: 50; align-items: center; justify-content: center; }
+  #modal { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; width: 640px; max-height: 70vh; overflow-y: auto; padding: 22px; box-shadow: 0 24px 64px rgba(0,0,0,.5); animation: modalIn .18s ease; }
+  #modal h3 { margin-bottom: 12px; font-size: 15px; font-family: var(--mono); word-break: break-all; }
+  @keyframes modalIn { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+  .cycle-item { font-size: 12px; font-family: var(--mono); background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; transition: border-color .15s; }
+  .cycle-item:hover { border-color: var(--accent); }
+  #search-results { position: absolute; top: 54px; left: 50%; transform: translateX(-38%); background: rgba(13,21,38,.97); backdrop-filter: blur(10px); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 16px 48px rgba(0,0,0,.45); max-height: 320px; overflow-y: auto; z-index: 20; display: none; width: 420px; }
+  #search-results .sr { padding: 9px 12px; font-size: 13px; cursor: pointer; font-family: var(--mono); border-bottom: 1px solid var(--border-soft); color: #c9d5ea; }
+  #search-results .sr:hover { background: rgba(56,189,248,.1); color: #fff; }
+  #search-results .sr .kind { color: var(--muted); font-size: 11px; margin-right: 6px; }
+  #toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); background: rgba(13,21,38,.95); border: 1px solid var(--border); color: var(--text); padding: 10px 18px; border-radius: 10px; font-size: 13px; z-index: 100; display: none; box-shadow: 0 12px 36px rgba(0,0,0,.45); animation: toastIn .22s ease; }
+  @keyframes toastIn { from { opacity: 0; transform: translate(-50%, -6px); } to { opacity: 1; transform: translate(-50%, 0); } }
 </style>
 </head>
 <body>
@@ -80,6 +112,8 @@
 <div id="main">
   <div id="container">
     <div id="tooltip"></div>
+    <div id="loading"><div class="spin"></div><div class="txt">图谱加载中…</div></div>
+    <div id="panel-toggle" title="类型详情">📋</div>
     <div id="pkg-panel">
       <div class="pkg-head">📦 按包过滤<span class="sub" id="pkg-count"></span><span class="pkg-close" id="pkg-close">✕</span></div>
       <input id="pkg-search" placeholder="过滤包名…" autocomplete="off">
@@ -97,7 +131,7 @@
       <div><span class="dot" style="background:#7c3aed"></span>record</div>
     </div>
   </div>
-  <div id="panel"><div class="empty">点击图中的节点查看类型详情</div></div>
+  <div id="panel" class="collapsed"><div class="empty">点击图中的节点查看类型详情</div></div>
 </div>
 <div id="search-results"></div>
 <div id="modal-mask"><div id="modal"></div></div>
@@ -105,7 +139,7 @@
 
 <script>
 const COLORS = { class: '#2563eb', interface: '#059669', enum: '#d97706', record: '#7c3aed' };
-const EDGE_COLORS = { EXTENDS: '#dc2626', IMPLEMENTS: '#059669', DEPENDS_ON: '#94a3b8', CALLS: '#2563eb' };
+const EDGE_COLORS = { EXTENDS: '#f87171', IMPLEMENTS: '#34d399', DEPENDS_ON: '#5a6b8c', CALLS: '#60a5fa' };
 let graph = null, currentProject = '';
 let activePackages = new Set();          // 选中的包;空 = 显示全部
 let focusState = null;                   // {center, depth};null = 全量/包过滤模式
@@ -139,6 +173,11 @@ window.addEventListener('load', async () => {
     renderPkgList(); refreshGraph();
   });
   $('pkg-search').addEventListener('input', renderPkgList);
+  $('panel-toggle').addEventListener('click', togglePanel);
+  // 面板收起/展开时画布尺寸变化,G6 需要同步跟随
+  new ResizeObserver(() => {
+    if (graph) graph.changeSize($('container').clientWidth, $('container').clientHeight);
+  }).observe($('container'));
 });
 
 /** 切换/进入项目视图:重置过滤状态,加载包列表和全量图 */
@@ -173,16 +212,21 @@ function renderPkgList() {
 /** 根据当前状态(聚焦模式 / 包过滤)拉取数据并渲染 */
 async function refreshGraph() {
   if (!currentProject) return;
-  let data;
-  if (focusState) {
-    data = await api(`/graph/focus?project=${encodeURIComponent(currentProject)}&qn=${encodeURIComponent(focusState.center)}&depth=${focusState.depth}`);
-  } else {
-    const qs = activePackages.size
-      ? `&packages=${[...activePackages].map(p => encodeURIComponent(p)).join('&packages=')}` : '';
-    data = await api(`/graph/overview?project=${encodeURIComponent(currentProject)}${qs}`);
+  $('loading').style.display = 'flex';
+  try {
+    let data;
+    if (focusState) {
+      data = await api(`/graph/focus?project=${encodeURIComponent(currentProject)}&qn=${encodeURIComponent(focusState.center)}&depth=${focusState.depth}`);
+    } else {
+      const qs = activePackages.size
+        ? `&packages=${[...activePackages].map(p => encodeURIComponent(p)).join('&packages=')}` : '';
+      data = await api(`/graph/overview?project=${encodeURIComponent(currentProject)}${qs}`);
+    }
+    renderGraph(data);
+    updateBanner();
+  } finally {
+    $('loading').style.display = 'none';
   }
-  renderGraph(data);
-  updateBanner();
 }
 
 function updateBanner() {
@@ -226,6 +270,7 @@ async function onDeleteProject() {
   currentProject = '';
   if (graph) graph.clear();
   $('panel').innerHTML = '<div class="empty">点击图中的节点查看类型详情</div>';
+  setPanel(false);
   await loadProjects();
 }
 
@@ -236,22 +281,22 @@ function onAnalyze() {
       <div>
         <div style="font-size:12px;color:#64748b;margin-bottom:4px">Git 仓库地址 或 本地目录绝对路径 *</div>
         <input id="inp-url" placeholder="https://github.com/user/repo.git 或 /Users/xxx/项目路径"
-          style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;font-family:ui-monospace,Menlo,monospace">
+          style="width:100%;padding:8px 10px;border:1px solid #334155;background:#16223c;color:#e2e8f0;border-radius:6px;font-size:13px;font-family:ui-monospace,Menlo,monospace">
       </div>
       <div style="display:flex;gap:12px">
         <div style="flex:1">
           <div style="font-size:12px;color:#64748b;margin-bottom:4px">分支 / Tag(可选,仅 Git)</div>
           <input id="inp-branch" placeholder="默认分支"
-            style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">
+            style="width:100%;padding:8px 10px;border:1px solid #334155;background:#16223c;color:#e2e8f0;border-radius:6px;font-size:13px">
         </div>
         <div style="flex:1">
           <div style="font-size:12px;color:#64748b;margin-bottom:4px">项目名称(可选)</div>
           <input id="inp-name" placeholder="自动推断"
-            style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">
+            style="width:100%;padding:8px 10px;border:1px solid #334155;background:#16223c;color:#e2e8f0;border-radius:6px;font-size:13px">
         </div>
       </div>
       <div style="font-size:11px;color:#94a3b8">Git 仓库使用浅克隆(--depth 1),私有仓库会自动使用你本机的 git 凭证(ssh key 等);分析完成后临时文件自动清理。</div>
-      <button id="btn-do-analyze" style="padding:9px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">开始分析</button>
+      <button id="btn-do-analyze" style="padding:10px;background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600">开始分析</button>
     </div>`;
   $('modal-mask').style.display = 'flex';
   $('inp-url').focus();
@@ -291,11 +336,11 @@ function createGraph(nodes, edges) {
     container: 'container',
     layout,
     defaultNode: {
-      size: 34, style: { stroke: '#fff', lineWidth: 2 },
-      labelCfg: { position: 'bottom', style: { fontSize: 10, fill: '#475569' } },
+      size: 34, style: { stroke: '#0d1526', lineWidth: 2 },
+      labelCfg: { position: 'bottom', style: { fontSize: 10, fill: '#9fb2d0' } },
     },
-    defaultEdge: { style: { endArrow: { path: G6.Arrow.triangle(7, 9, 0), fill: '#cbd5e1' }, lineWidth: 1 } },
-    nodeStateStyles: { highlight: { stroke: '#f59e0b', lineWidth: 3 }, dim: { opacity: 0.25 } },
+    defaultEdge: { style: { endArrow: { path: G6.Arrow.triangle(7, 9, 0), fill: '#5a6b8c' }, lineWidth: 1, opacity: 0.85 } },
+    nodeStateStyles: { highlight: { stroke: '#fbbf24', lineWidth: 3 }, dim: { opacity: 0.18 } },
     modes: { default: ['drag-canvas', 'zoom-canvas', 'drag-node'] },
   });
   graph.data({
@@ -325,7 +370,6 @@ function createGraph(nodes, edges) {
     tip.style.top = (e.canvasY + 14) + 'px';
   });
   graph.on('node:mouseleave', () => $('tooltip').style.display = 'none');
-  window.addEventListener('resize', () => graph && graph.changeSize($('container').scrollWidth, $('container').scrollHeight));
 }
 
 function renderGraph(data) {
@@ -352,10 +396,17 @@ function clearHighlight() {
   graph.getEdges().forEach(e => graph.setItemState(e, 'dim', false));
 }
 
-// ==================== 详情面板 ====================
+/** ==================== 详情面板(抽屉式:默认收起,点节点自动展开) ==================== */
+function setPanel(open) {
+  $('panel').classList.toggle('collapsed', !open);
+  $('panel-toggle').classList.toggle('active', open);
+}
+window.togglePanel = () => setPanel($('panel').classList.contains('collapsed'));
+
 async function showTypeDetail(qn) {
   const data = await api(`/types/${encodeURIComponent(qn)}?project=${encodeURIComponent(currentProject)}`);
   if (data.error) { toast(data.error); return; }
+  setPanel(true);
   const t = data.type;
   let html = `
     <span class="close" onclick="clearPanel()">✕</span>
@@ -364,15 +415,15 @@ async function showTypeDetail(qn) {
     <div class="section">
       <h3>🧭 局部视图
         <span style="float:right;font-size:11px">
-          <a style="color:#2563eb;cursor:pointer;text-decoration:underline" onclick="focusOn('${esc(qn)}',1)">1层</a> ·
-          <a style="color:#2563eb;cursor:pointer;text-decoration:underline" onclick="focusOn('${esc(qn)}',2)">2层</a> ·
-          <a style="color:#2563eb;cursor:pointer;text-decoration:underline" onclick="focusOn('${esc(qn)}',3)">3层</a>
+          <a style="color:#60a5fa;cursor:pointer" onclick="focusOn('${esc(qn)}',1)">1层</a> ·
+          <a style="color:#60a5fa;cursor:pointer" onclick="focusOn('${esc(qn)}',2)">2层</a> ·
+          <a style="color:#60a5fa;cursor:pointer" onclick="focusOn('${esc(qn)}',3)">3层</a>
         </span>
       </h3>
       <div style="font-size:11px;color:#94a3b8">以此类型为中心,只显示 N 层关系内的邻居</div>
     </div>
     <div class="section">
-      <h3>⚡ 影响分析<button style="float:right;font-size:11px;padding:2px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer" onclick="runImpact('${esc(qn)}')">谁会被波及?</button></h3>
+      <h3>⚡ 影响分析<button style="float:right;font-size:11px;padding:3px 10px;border:1px solid #24314f;background:#16223c;color:#7dd3fc;border-radius:5px;cursor:pointer" onclick="runImpact('${esc(qn)}')">谁会被波及?</button></h3>
       <div id="impact-result"></div>
     </div>
     <div class="section"><h3>方法 (${data.methods.length})</h3>
@@ -392,13 +443,13 @@ async function showTypeDetail(qn) {
   $('panel').innerHTML = html;
 }
 
-window.clearPanel = () => $('panel').innerHTML = '<div class="empty">点击图中的节点查看类型详情</div>';
+window.clearPanel = () => setPanel(false);
 
 window.runImpact = async qn => {
   const list = await api(`/impact/${encodeURIComponent(qn)}?project=${encodeURIComponent(currentProject)}&depth=10`);
   const el = $('impact-result');
   if (!list.length) { el.innerHTML = '<div class="empty" style="margin-top:4px">✅ 没有类型依赖它,改动影响面为零</div>'; return; }
-  el.innerHTML = `<div style="font-size:12px;color:#dc2626;margin:6px 0">⚠ ${list.length} 个类型会被波及(点击可跳转):</div>` +
+  el.innerHTML = `<div style="font-size:12px;color:#f87171;margin:6px 0">⚠ ${list.length} 个类型会被波及(点击可跳转):</div>` +
     list.map(i => `<div class="rel-item" onclick="focusNode('${i.name.replace(/'/g, "\\'")}');showTypeDetail('${i.name.replace(/'/g, "\\'")}')">…${i.depth} 层 · ${i.name}</div>`).join('');
   highlightSet([qn, ...list.map(i => i.name)]);
   setTimeout(clearHighlight, 6000);
