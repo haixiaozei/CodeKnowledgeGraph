@@ -92,11 +92,12 @@ public class GraphMcpTools {
 
     // ==================== F2.3: 分析触发(异步) ====================
 
-    @McpTool(name = "analyze_project", description = "分析本地代码目录并建立知识图谱(异步任务,立即返回 jobId)。大仓库需要几分钟,用 get_analysis_status 轮询结果。仅支持本地路径,Git 仓库请先 clone 到本地")
+    @McpTool(name = "analyze_project", description = "分析本地代码目录并建立知识图谱(异步任务,立即返回 jobId)。大仓库需要几分钟,用 get_analysis_status 轮询结果。仅支持本地路径,Git 仓库请先 clone 到本地。重复分析时自动增量(只处理变更文件),full=true 强制全量重建")
     public Map<String, Object> analyzeProject(
             @McpToolParam(description = "项目名称,不传则用目录名推断", required = false) String name,
-            @McpToolParam(description = "本地目录绝对路径,如 /Users/xxx/projects/demo") String path) {
-        return jobs.submit(name, path);
+            @McpToolParam(description = "本地目录绝对路径,如 /Users/xxx/projects/demo") String path,
+            @McpToolParam(description = "强制全量重建,默认 false 走增量", required = false) Boolean full) {
+        return jobs.submit(name, path, Boolean.TRUE.equals(full));
     }
 
     @McpTool(name = "get_analysis_status", description = "查询分析任务状态:PENDING/RUNNING 排队或执行中,DONE 返回统计信息,FAILED 返回错误原因")

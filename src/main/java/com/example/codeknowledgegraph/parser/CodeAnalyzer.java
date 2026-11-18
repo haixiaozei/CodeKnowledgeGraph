@@ -89,13 +89,8 @@ public class CodeAnalyzer {
         Set<String> typeEdgeSet = new HashSet<>();   // 去重
         List<Edge> callEdges = new ArrayList<>();
         Set<String> callEdgeSet = new HashSet<>();
-
-        for (Parsed parsed : units) {
-            for (TypeDeclaration<?> td : parsed.cu().getTypes()) {
-                extractRelations(td, parsed.cu(), typeMap, simpleNameToQn, methodsByType,
-                        typeEdges, typeEdgeSet, callEdges, callEdgeSet);
-            }
-        }
+        extractRelations(units, typeMap, simpleNameToQn, methodsByType,
+                typeEdges, typeEdgeSet, callEdges, callEdgeSet);
 
         List<MethodInfo> allMethods = methodsByType.values().stream().flatMap(List::stream).toList();
         List<FieldInfo> allFields = fieldsByType.values().stream().flatMap(List::stream).toList();
@@ -107,6 +102,111 @@ public class CodeAnalyzer {
         return new AnalysisResult(projectName, root.toAbsolutePath().toString(),
                 new ArrayList<>(packages), new ArrayList<>(typeMap.values()),
                 allMethods, allFields, typeEdges, callEdges, units.size());
+    }
+
+    // ==================== 增量分析(F3.3) ====================
+
+    /** 图谱种子:未变更文件的既有索引,增量解析时用于跨文件关系解析与名称解析 */
+    public record GraphSeed(Map<String, TypeInfo> types,
+                            Map<String, List<MethodInfo>> methods,
+                            Map<String, String> simpleNames) {}
+
+    /**
+     * 增量分析:只解析变更文件,跨文件关系借助种子索引(未变更部分的图数据)与
+     * 符号求解器(按需从磁盘读取未变更源码)完成。
+     */
+    public AnalysisResult analyzeDelta(String projectName, Path root, List<String> files, GraphSeed seed) throws IOException {
+        long start = System.currentTimeMillis();
+        List<Path> sourceRoots = findSourceRoots(root);
+        long tRoots = System.currentTimeMillis();
+
+        CombinedTypeSolver typeSolver = new CombinedTypeSolver();
+        sourceRoots.forEach(r -> typeSolver.add(new JavaParserTypeSolver(r.toFile())));
+        typeSolver.add(new ReflectionTypeSolver());
+
+        JavaParser parser = new JavaParser(new ParserConfiguration()
+                .setSymbolResolver(new JavaSymbolSolver(typeSolver))
+                .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21));
+
+        List<Parsed> units = parseFiles(parser, root, files);
+        long tParsed = System.currentTimeMillis();
+        log.info("[增量计时] 源根发现+解析: {}ms ({} 文件)", tParsed - tRoots, units.size());
+        log.info("[{}] 增量解析 {} 个文件", projectName, units.size());
+
+        // 种子只含未变更部分;变更文件的类型/方法由下方 collect 覆盖
+        Map<String, TypeInfo> typeMap = new LinkedHashMap<>(seed.types());
+        Map<String, List<MethodInfo>> methodsByType = new HashMap<>();
+        seed.methods().forEach((k, v) -> methodsByType.put(k, new ArrayList<>(v)));
+        Map<String, List<FieldInfo>> fieldsByType = new HashMap<>();
+        Set<String> packages = new LinkedHashSet<>();
+        Map<String, String> simpleNameToQn = new HashMap<>(seed.simpleNames());
+
+        for (Parsed parsed : units) {
+            CompilationUnit cu = parsed.cu();
+            String pkg = cu.getPackageDeclaration().map(p -> p.getNameAsString()).orElse("");
+            if (!pkg.isEmpty()) packages.add(pkg);
+            for (TypeDeclaration<?> td : cu.getTypes()) {
+                collectType(td, pkg, parsed.relativePath().toString(), typeMap, methodsByType, fieldsByType, simpleNameToQn);
+            }
+        }
+
+        List<Edge> typeEdges = new ArrayList<>();
+        Set<String> typeEdgeSet = new HashSet<>();
+        List<Edge> callEdges = new ArrayList<>();
+        Set<String> callEdgeSet = new HashSet<>();
+        extractRelations(units, typeMap, simpleNameToQn, methodsByType,
+                typeEdges, typeEdgeSet, callEdges, callEdgeSet);
+        log.info("[增量计时] 关系抽取(含符号解析): {}ms", System.currentTimeMillis() - tParsed);
+
+        // 增量结果只包含变更文件的实体(种子数据已在图中,不能重复写入)
+        List<TypeInfo> deltaTypes = typeMap.values().stream()
+                .filter(t -> !seed.types().containsKey(t.qualifiedName())).toList();
+        List<MethodInfo> deltaMethods = deltaTypes.stream()
+                .map(t -> methodsByType.getOrDefault(t.qualifiedName(), List.<MethodInfo>of()))
+                .flatMap(List::stream).toList();
+        List<FieldInfo> deltaFields = deltaTypes.stream()
+                .map(t -> fieldsByType.getOrDefault(t.qualifiedName(), List.<FieldInfo>of()))
+                .flatMap(List::stream).toList();
+
+        log.info("[{}] 增量分析完成: {} 文件 / {} 类型 / {} 方法 / {} 类型关系 / {} 调用关系, 耗时 {}ms",
+                projectName, units.size(), deltaTypes.size(), deltaMethods.size(),
+                typeEdges.size(), callEdges.size(), System.currentTimeMillis() - start);
+
+        return new AnalysisResult(projectName, root.toAbsolutePath().toString(),
+                new ArrayList<>(packages), deltaTypes, deltaMethods, deltaFields,
+                typeEdges, callEdges, units.size());
+    }
+
+    /** 关系抽取统一入口:全量与增量共用 */
+    private void extractRelations(List<Parsed> units, Map<String, TypeInfo> typeMap,
+                                   Map<String, String> simpleNameToQn, Map<String, List<MethodInfo>> methodsByType,
+                                   List<Edge> typeEdges, Set<String> typeEdgeSet,
+                                   List<Edge> callEdges, Set<String> callEdgeSet) {
+        for (Parsed parsed : units) {
+            for (TypeDeclaration<?> td : parsed.cu().getTypes()) {
+                extractRelations(td, parsed.cu(), typeMap, simpleNameToQn, methodsByType,
+                        typeEdges, typeEdgeSet, callEdges, callEdgeSet);
+            }
+        }
+    }
+
+    /** 只解析指定文件(相对路径);已删除/不在 target 之外的文件跳过 */
+    private List<Parsed> parseFiles(JavaParser parser, Path root, List<String> relativePaths) {
+        List<Parsed> units = new ArrayList<>();
+        Path absRoot = root.toAbsolutePath();
+        for (String rel : relativePaths) {
+            if (!rel.endsWith(".java") || rel.contains("/target/")) continue;
+            Path p = absRoot.resolve(rel);
+            if (!Files.isRegularFile(p)) continue;   // 已删除的文件
+            try {
+                var result = parser.parse(ParseStart.COMPILATION_UNIT,
+                        Providers.provider(p, java.nio.charset.StandardCharsets.UTF_8));
+                result.getResult().ifPresent(cu -> units.add(new Parsed(absRoot.relativize(p), cu)));
+            } catch (Exception e) {
+                log.warn("解析失败,跳过 {}", p, e);
+            }
+        }
+        return units;
     }
 
     // ==================== 实体收集 ====================
