@@ -67,7 +67,8 @@ public class ProjectAnalysisService {
             List<String> deleted = cs.deleted().stream()
                     .filter(f -> f.endsWith(".java") && !f.contains("/target/")).toList();
 
-            if (cs.noChanges()) {
+            // 图谱只关心 .java:原始变更集非空但过滤后为空(如仅新增了配置文件)同样视为无变化
+            if (cs.noChanges() || (reanalyze.isEmpty() && deleted.isEmpty())) {
                 log.info("[{}] 无变化,跳过分析", projectName);
                 return Map.of("project", projectName, "mode", "skipped",
                         "message", "代码无变化(工作区干净且 commit 未变)");
