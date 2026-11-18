@@ -65,7 +65,7 @@ public class CodeAnalyzer {
                 .setSymbolResolver(new JavaSymbolSolver(typeSolver))
                 .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21));
 
-        List<CompilationUnit> units = parseAll(parser, root);
+        List<Parsed> units = parseAll(parser, root);
         log.info("[{}] 解析完成,共 {} 个 Java 文件", projectName, units.size());
 
         // ---------- 第一遍:收集实体 ----------
@@ -75,12 +75,12 @@ public class CodeAnalyzer {
         Set<String> packages = new LinkedHashSet<>();
         Map<String, String> simpleNameToQn = new HashMap<>();         // 简名 -> qn(同图内)
 
-        for (CompilationUnit cu : units) {
+        for (Parsed parsed : units) {
+            CompilationUnit cu = parsed.cu();
             String pkg = cu.getPackageDeclaration().map(p -> p.getNameAsString()).orElse("");
             if (!pkg.isEmpty()) packages.add(pkg);
-            String filePath = cu.getStorage().map(s -> s.getPath().toString()).orElse(""); // 相对根目录路径
             for (TypeDeclaration<?> td : cu.getTypes()) {
-                collectType(td, pkg, filePath, typeMap, methodsByType, fieldsByType, simpleNameToQn);
+                collectType(td, pkg, parsed.relativePath().toString(), typeMap, methodsByType, fieldsByType, simpleNameToQn);
             }
         }
 
@@ -90,9 +90,9 @@ public class CodeAnalyzer {
         List<Edge> callEdges = new ArrayList<>();
         Set<String> callEdgeSet = new HashSet<>();
 
-        for (CompilationUnit cu : units) {
-            for (TypeDeclaration<?> td : cu.getTypes()) {
-                extractRelations(td, cu, typeMap, simpleNameToQn, methodsByType,
+        for (Parsed parsed : units) {
+            for (TypeDeclaration<?> td : parsed.cu().getTypes()) {
+                extractRelations(td, parsed.cu(), typeMap, simpleNameToQn, methodsByType,
                         typeEdges, typeEdgeSet, callEdges, callEdgeSet);
             }
         }
@@ -432,8 +432,11 @@ public class CodeAnalyzer {
         return List.copyOf(roots);
     }
 
-    private List<CompilationUnit> parseAll(JavaParser parser, Path root) throws IOException {
-        List<CompilationUnit> units = new ArrayList<>();
+    /** 解析结果与文件相对路径的配对(不用 CompilationUnit.Storage,它内部会转绝对路径) */
+    private record Parsed(Path relativePath, CompilationUnit cu) {}
+
+    private List<Parsed> parseAll(JavaParser parser, Path root) throws IOException {
+        List<Parsed> units = new ArrayList<>();
         Path absRoot = root.toAbsolutePath();
         try (Stream<Path> files = Files.walk(root)) {
             files.filter(p -> p.toString().endsWith(".java"))
@@ -442,12 +445,8 @@ public class CodeAnalyzer {
                         try {
                             var result = parser.parse(ParseStart.COMPILATION_UNIT,
                                     Providers.provider(p, java.nio.charset.StandardCharsets.UTF_8));
-                            result.getResult().ifPresent(cu -> {
-                                // 记录相对根目录的路径(F1.1 源码定位用)
-                                cu.setStorage(absRoot.relativize(p.toAbsolutePath()),
-                                        java.nio.charset.StandardCharsets.UTF_8);
-                                units.add(cu);
-                            });
+                            result.getResult().ifPresent(cu ->
+                                    units.add(new Parsed(absRoot.relativize(p.toAbsolutePath()), cu)));
                         } catch (Exception e) {
                             log.warn("解析失败,跳过 {}", p, e);
                         }
