@@ -373,8 +373,11 @@ public class GraphQueryService {
      * 入口规则: 构造器 / main / REST 端点 / 接口声明 / 携带排除注解(默认 Override、Test 系列)。
      */
     public List<Map<String, Object>> deadCode(String project, List<String> excludeAnnotations) {
+        // 默认排除的"入口注解": 框架通过反射回调的方法( override 实现/测试/端点/MCP 工具/异常处理/生命周期 )
         List<String> excluded = (excludeAnnotations == null || excludeAnnotations.isEmpty())
-                ? List.of("Override", "Test", "BeforeEach", "BeforeAll", "AfterEach", "AfterAll", "ParameterizedTest")
+                ? List.of("Override", "Test", "BeforeEach", "BeforeAll", "AfterEach", "AfterAll",
+                          "ParameterizedTest", "McpTool", "ExceptionHandler",
+                          "PostConstruct", "PreDestroy", "Scheduled", "EventListener")
                 : excludeAnnotations;
         return List.copyOf(neo4j.query("""
                 MATCH (t:Type {project: $p})-[:HAS_METHOD]->(m:Method)

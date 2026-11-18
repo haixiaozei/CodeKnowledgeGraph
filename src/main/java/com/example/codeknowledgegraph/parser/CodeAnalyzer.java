@@ -384,7 +384,7 @@ public class CodeAnalyzer {
             // 1. 符号求解器精确解析
             String resolved = tryResolveCall(call);
             if (resolved != null) {
-                addCallEdge(callerId, resolved, methodsByType, callEdges, callEdgeSet,
+                addCallEdge(callerId, call, resolved, methodsByType, callEdges, callEdgeSet,
                         qn, typeMap, typeEdges, typeEdgeSet);
             } else {
                 // 2. 启发式:推断接收者变量类型
@@ -419,7 +419,7 @@ public class CodeAnalyzer {
     }
 
     /** 调用边落在图内类型上时,按 方法名+参数个数 匹配目标方法 */
-    private void addCallEdge(String callerId, String declaringType,
+    private void addCallEdge(String callerId, MethodCallExpr call, String declaringType,
                              Map<String, List<MethodInfo>> methodsByType,
                              List<Edge> callEdges, Set<String> callEdgeSet,
                              String sourceType, Map<String, TypeInfo> typeMap,
@@ -429,7 +429,8 @@ public class CodeAnalyzer {
             if (!methodsByType.containsKey(declaringType)) return;
             addTypeEdge(sourceType, declaringType, AnalysisResult.DEPENDS_ON, typeEdges, typeEdgeSet);
         }
-        matchCallByName(callerId, null, declaringType, methodsByType, callEdges, callEdgeSet);
+        // 修复: 必须携带 call(方法名+参数个数),否则会错误匹配到声明类型的第一个方法
+        matchCallByName(callerId, call, declaringType, methodsByType, callEdges, callEdgeSet);
     }
 
     private void matchCallByName(String callerId, MethodCallExpr call, String declaringType,
@@ -457,10 +458,11 @@ public class CodeAnalyzer {
                                           Map<String, TypeInfo> typeMap,
                                           Map<String, String> simpleNameToQn, String currentType) {
         var scope = call.getScope();
-        if (scope.isEmpty()) return null;
+        if (scope.isEmpty()) return currentType; // 无作用域调用(直接 method())默认属于当前类
         final String varName;
         if (scope.get() instanceof NameExpr ne) {
             varName = ne.getNameAsString();
+            if (varName.equals("this")) return currentType;
         } else if (scope.get() instanceof ObjectCreationExpr oc) {
             return resolveTypeName(oc.getType().asString(), cu, typeMap, simpleNameToQn);
         } else {
