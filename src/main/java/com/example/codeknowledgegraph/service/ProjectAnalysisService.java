@@ -89,10 +89,13 @@ public class ProjectAnalysisService {
                                              String prevCommit, Integer prevFileCount, long start) throws IOException {
         List<String> all = new ArrayList<>(reanalyze);
         all.addAll(deleted);
+        long t0 = System.currentTimeMillis();
 
         // 1. 种子索引(未变更部分)与跨文件入边快照,均在删除前完成
         List<TypeInfo> typeSeed = store.loadTypeSeed(projectName, all);
         List<MethodInfo> methodSeed = store.loadMethodSeed(projectName, all);
+        long tSeed = System.currentTimeMillis();
+        log.info("[增量计时] 种子加载: {}ms ({} 类型 / {} 方法)", tSeed - t0, typeSeed.size(), methodSeed.size());
         Map<String, TypeInfo> typeMap = new LinkedHashMap<>();
         Map<String, String> simpleNames = new HashMap<>();
         for (TypeInfo t : typeSeed) {
@@ -104,14 +107,21 @@ public class ProjectAnalysisService {
         var seed = new CodeAnalyzer.GraphSeed(typeMap, methodsByType, simpleNames);
 
         GraphStoreService.CrossEdges captured = store.captureCrossEdges(projectName, all);
+        long tCapture = System.currentTimeMillis();
+        log.info("[增量计时] 跨文件边快照: {}ms (类型边 {} / 调用边 {})",
+                tCapture - tSeed, captured.typeEdges().size(), captured.callEdges().size());
 
         // 2. 删除变更文件的旧数据
         store.deleteByFilePaths(projectName, all);
+        long tDelete = System.currentTimeMillis();
 
         // 3. 增量解析并落地
         AnalysisResult delta = analyzer.analyzeDelta(projectName, abs, reanalyze, seed);
+        long tDelta = System.currentTimeMillis();
+        log.info("[增量计时] 增量解析总耗时: {}ms", tDelta - tDelete);
         store.applyDelta(delta);
         store.restoreCrossEdges(projectName, captured);
+        log.info("[增量计时] 写入+边恢复: {}ms", System.currentTimeMillis() - tDelta);
 
         // 4. 更新分析状态:有未提交改动时不推进 commit 指针(否则下次 diff 基线错乱)
         String commitToStore = cs.dirty() ? prevCommit : cs.head();

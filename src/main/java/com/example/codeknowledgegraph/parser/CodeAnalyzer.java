@@ -118,6 +118,7 @@ public class CodeAnalyzer {
     public AnalysisResult analyzeDelta(String projectName, Path root, List<String> files, GraphSeed seed) throws IOException {
         long start = System.currentTimeMillis();
         List<Path> sourceRoots = findSourceRoots(root);
+        long tRoots = System.currentTimeMillis();
 
         CombinedTypeSolver typeSolver = new CombinedTypeSolver();
         sourceRoots.forEach(r -> typeSolver.add(new JavaParserTypeSolver(r.toFile())));
@@ -128,6 +129,8 @@ public class CodeAnalyzer {
                 .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21));
 
         List<Parsed> units = parseFiles(parser, root, files);
+        long tParsed = System.currentTimeMillis();
+        log.info("[增量计时] 源根发现+解析: {}ms ({} 文件)", tParsed - tRoots, units.size());
         log.info("[{}] 增量解析 {} 个文件", projectName, units.size());
 
         // 种子只含未变更部分;变更文件的类型/方法由下方 collect 覆盖
@@ -153,6 +156,7 @@ public class CodeAnalyzer {
         Set<String> callEdgeSet = new HashSet<>();
         extractRelations(units, typeMap, simpleNameToQn, methodsByType,
                 typeEdges, typeEdgeSet, callEdges, callEdgeSet);
+        log.info("[增量计时] 关系抽取(含符号解析): {}ms", System.currentTimeMillis() - tParsed);
 
         // 增量结果只包含变更文件的实体(种子数据已在图中,不能重复写入)
         List<TypeInfo> deltaTypes = typeMap.values().stream()
