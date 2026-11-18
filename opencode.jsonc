@@ -1,0 +1,17 @@
+{
+  // OpenCode 项目配置(仅影响本仓库内的 OpenCode 会话)
+  // 作用: 把本项目自带的「代码知识图谱」MCP 服务接入当前项目的 AI 会话,
+  //       使 agent 能调用 list_projects / get_context_pack / impact_analysis 等工具查询图谱。
+  // 前提: 本服务已在本地运行(./mvnw spring-boot:run, 端口 8080)。
+  // 接入方式与工具清单详见 docs/mcp-setup.md; 若不想使用, 删除本文件或将其改名为 opencode.jsonc.bak 即可。
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "code-graph": {
+        "type": "remote",
+        "url": "http://localhost:8080/mcp",
+        "oauth": false
+      }
+    }
+  }
+}
