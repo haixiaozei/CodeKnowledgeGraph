@@ -3,8 +3,13 @@ package com.example.codeknowledgegraph.service;
 import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -213,5 +218,149 @@ public class GraphQueryService {
                 RETURN x.name AS project, types, methods, count(c) AS calls
                 """).bind(project).to("p").fetch().first();
         return counts.orElse(Map.of("project", project));
+    }
+
+    /** 源码片段读取的行数上限,防止巨型类型撑爆响应 */
+    private static final int MAX_SOURCE_LINES = 2000;
+    /**
+     * F1.3: 按类型或方法定位并读取源码文本。
+     * 仅支持本地路径模式分析的项目;Git URL 模式分析的临时目录已被清理。
+     */
+    public Map<String, Object> sourceSnippet(String project, String qn, String methodId) {
+        boolean isMethod = methodId != null && !methodId.isBlank();
+        // 1. 定位节点(方法优先)
+        Map<String, Object> node;
+        if (isMethod) {
+            node = neo4j.query("""
+                    MATCH (t:Type {project: $p, qualifiedName: $qn})-[:HAS_METHOD]->(m:Method {project: $p, id: $id})
+                    RETURN m.id AS id, m.signature AS name, m.filePath AS filePath,
+                           m.startLine AS startLine, m.endLine AS endLine
+                    """).bindAll(Map.of("p", project, "qn", qn, "id", methodId))
+                    .fetch().first().orElse(null);
+        } else {
+            node = neo4j.query("""
+                    MATCH (t:Type {project: $p, qualifiedName: $qn})
+                    RETURN t.qualifiedName AS id, t.simpleName AS name, t.filePath AS filePath,
+                           t.startLine AS startLine, t.endLine AS endLine
+                    """).bindAll(Map.of("p", project, "qn", qn))
+                    .fetch().first().orElse(null);
+        }
+        if (node == null) return Map.of("error", "Not found: " + (isMethod ? methodId : qn));
+
+        // 2. 项目根路径(仅本地路径模式可读取源码)
+        String rootPath = neo4j.query("MATCH (x:Project {name: $p}) RETURN x.path AS path")
+                .bind(project).to("p").fetch().first()
+                .map(m -> String.valueOf(m.get("path"))).orElse("");
+        if (rootPath.startsWith("file://")) rootPath = rootPath.substring("file://".length());
+        if (rootPath.isBlank() || "null".equals(rootPath) || !Files.isDirectory(Path.of(rootPath))) {
+            return Map.of("error", "源码不可用: 该项目按 Git URL 分析,临时目录已清理,请使用本地路径模式重新分析");
+        }
+
+        // 3. 校验文件路径(防目录穿越)
+        Object filePathRaw = node.get("filePath");
+        if (filePathRaw == null || String.valueOf(filePathRaw).isBlank()) {
+            return Map.of("error", "该节点没有源码位置信息,请重新分析项目以升级数据");
+        }
+        Path file = Path.of(rootPath).resolve(String.valueOf(filePathRaw)).normalize();
+        if (!file.startsWith(Path.of(rootPath).normalize()) || !Files.isRegularFile(file)) {
+            return Map.of("error", "源码文件不存在: " + filePathRaw);
+        }
+
+        // 4. 读取行范围(1-based 含端点;老数据无行号时读全文件)
+        try {
+            List<String> allLines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            int from = node.get("startLine") instanceof Number n ? n.intValue() : 1;
+            int to = node.get("endLine") instanceof Number n ? n.intValue() : allLines.size();
+            from = Math.max(1, Math.min(from, allLines.size()));
+            to = Math.max(from, Math.min(to, allLines.size()));
+            boolean truncated = false;
+            if (to - from + 1 > MAX_SOURCE_LINES) { to = from + MAX_SOURCE_LINES - 1; truncated = true; }
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("id", node.get("id"));
+            result.put("name", node.get("name"));
+            result.put("filePath", String.valueOf(filePathRaw));
+            result.put("startLine", from);
+            result.put("endLine", to);
+            result.put("totalLines", allLines.size());
+            result.put("truncated", truncated);
+            result.put("source", String.join("\n", allLines.subList(from - 1, to)));
+            return result;
+        } catch (IOException e) {
+            return Map.of("error", "读取源码失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * F1.4: 上下文包——理解一个类型所需的最小完整信息,供 AI 直接消费。
+     * 组成: 类型元信息(含 Javadoc) + 源码(如可用) + 方法/字段 + 直接依赖(含签名摘要) + 被依赖 + 外部调用关系。
+     */
+    public Map<String, Object> contextPack(String project, String qn) {
+        var type = neo4j.query("""
+                MATCH (t:Type {project: $p, qualifiedName: $qn})
+                RETURN t.qualifiedName AS qualifiedName, t.simpleName AS name, t.kind AS kind,
+                       t.visibility AS visibility, t.isAbstract AS isAbstract, t.lineCount AS lineCount,
+                       t.packageName AS pkg, t.javadoc AS javadoc, t.filePath AS filePath
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().first();
+        if (type.isEmpty()) return Map.of("error", "Type not found: " + qn);
+
+        Map<String, Object> result = new HashMap<>(type.get());
+
+        // 源码(Git URL 模式不可用时置 null,不报错——上下文包其余部分仍有价值)
+        Map<String, Object> src = sourceSnippet(project, qn, null);
+        result.put("source", src.containsKey("error") ? null : src);
+
+        // 方法(含调用者计数与行号,便于跳转)
+        result.put("methods", new ArrayList<>(neo4j.query("""
+                MATCH (:Type {project: $p, qualifiedName: $qn})-[:HAS_METHOD]->(m:Method)
+                OPTIONAL MATCH (caller:Method)-[:CALLS]->(m)
+                RETURN m.id AS id, m.signature AS signature, m.visibility AS visibility,
+                       m.isStatic AS isStatic, m.startLine AS startLine, m.javadoc AS javadoc,
+                       count(caller) AS callers
+                ORDER BY m.startLine
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        // 字段
+        result.put("fields", new ArrayList<>(neo4j.query("""
+                MATCH (:Type {project: $p, qualifiedName: $qn})-[:HAS_FIELD]->(f:Field)
+                RETURN f.name AS name, f.type AS type, f.visibility AS visibility
+                ORDER BY f.name
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        // 直接依赖:关系类型 + 对方 Javadoc + 对方方法签名摘要(最多 30 个)
+        result.put("dependsOn", new ArrayList<>(neo4j.query("""
+                MATCH (a:Type {project: $p, qualifiedName: $qn})-[r]->(b:Type {project: $p})
+                OPTIONAL MATCH (b)-[:HAS_METHOD]->(m:Method)
+                WITH b, type(r) AS kind, collect(DISTINCT m.signature)[..30] AS methodSignatures
+                RETURN b.qualifiedName AS name, kind, b.javadoc AS javadoc, methodSignatures
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        // 被依赖(反向)
+        result.put("dependedBy", new ArrayList<>(neo4j.query("""
+                MATCH (a:Type {project: $p})-[r]->(b:Type {project: $p, qualifiedName: $qn})
+                RETURN a.qualifiedName AS name, type(r) AS kind
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        // 外部调用者:谁调用了本类型的方法(最多 20 条)
+        result.put("methodCallers", new ArrayList<>(neo4j.query("""
+                MATCH (owner:Type {project: $p})-[:HAS_METHOD]->(caller:Method {project: $p})
+                      -[:CALLS]->(m:Method {project: $p})<-[:HAS_METHOD]-(t:Type {project: $p, qualifiedName: $qn})
+                WHERE owner.qualifiedName <> $qn
+                RETURN owner.qualifiedName AS callerType, caller.signature AS callerSignature,
+                       m.signature AS calleeSignature
+                LIMIT 20
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        // 本类型方法的对外调用(最多 20 条)
+        result.put("methodCallees", new ArrayList<>(neo4j.query("""
+                MATCH (t:Type {project: $p, qualifiedName: $qn})-[:HAS_METHOD]->(m:Method {project: $p})
+                      -[:CALLS]->(callee:Method {project: $p})<-[:HAS_METHOD]-(owner:Type {project: $p})
+                WHERE owner.qualifiedName <> $qn
+                RETURN m.signature AS callerSignature, owner.qualifiedName AS calleeType,
+                       callee.signature AS calleeSignature
+                LIMIT 20
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        return result;
     }
 }

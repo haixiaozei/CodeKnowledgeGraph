@@ -146,4 +146,19 @@ public class ApiController {
     public List<Map<String, Object>> callees(@PathVariable String id, @RequestParam String project) {
         return query.methodCallees(project, id);
     }
+
+    /** F1.3: 源码片段——按类型(或方法)定位并读取源码文本 */
+    @GetMapping("/source")
+    public Map<String, Object> source(@RequestParam String project,
+                                        @RequestParam String qn,
+                                        @RequestParam(required = false) String method) {
+        return query.sourceSnippet(project, qn, method);
+    }
+
+    /** F1.4: 上下文包——理解一个类型所需的最小完整信息,供 AI 直接消费 */
+    @GetMapping("/context/{qualifiedName}")
+    public Map<String, Object> contextPack(@PathVariable String qualifiedName,
+                                            @RequestParam String project) {
+        return query.contextPack(project, qualifiedName);
+    }
 }
