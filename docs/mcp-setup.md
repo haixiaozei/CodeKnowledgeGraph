@@ -57,6 +57,19 @@ opencode mcp list   # 应显示 ✓ code-graph connected
 
 保存后重启 Claude Desktop。
 
+## 其他客户端接入(语法已按 2026-11 官方文档核实)
+
+| 客户端 | 配置方式 |
+|--------|---------|
+| OpenCode(全局) | `opencode mcp add code-graph --global --url http://localhost:8080/mcp` |
+| Claude Code(所有项目) | `claude mcp add --transport http --scope user code-graph http://localhost:8080/mcp` |
+| Claude Code(仅当前项目) | `claude mcp add --transport http code-graph http://localhost:8080/mcp` |
+| Cursor | `~/.cursor/mcp.json`(全局)或 `.cursor/mcp.json`(项目)写 `{"mcpServers": {"code-graph": {"url": "http://localhost:8080/mcp"}}}` |
+| Codex | `codex mcp add --url http://localhost:8080/mcp code-graph` |
+| Gemini CLI | `gemini mcp add --transport http code-graph http://localhost:8080/mcp` |
+
+任何 MCP 客户端,只要是 Streamable-HTTP 传输,指向 `http://localhost:8080/mcp` 即可。
+
 ## 可用工具一览
 
 | 工具 | 用途 |
