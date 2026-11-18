@@ -164,4 +164,34 @@ public class ApiController {
                                             @RequestParam String project) {
         return query.contextPack(project, qualifiedName);
     }
+
+    // ==================== F4: 分析维度增强 ====================
+
+    /** F4.2: REST 端点索引,q 为路径片段过滤(可空=全部) */
+    @GetMapping("/endpoints")
+    public List<Map<String, Object>> endpoints(@RequestParam String project,
+                                                 @RequestParam(required = false) String q) {
+        return query.restEndpoints(project, q);
+    }
+
+    /** F4.1: 死代码检测,excludeAnnotations 为逗号分隔的注解名(覆盖默认入口规则) */
+    @GetMapping("/quality/dead-code")
+    public List<Map<String, Object>> deadCode(@RequestParam String project,
+                                                @RequestParam(required = false) String excludeAnnotations) {
+        return query.deadCode(project, excludeAnnotations == null || excludeAnnotations.isBlank()
+                ? null : List.of(excludeAnnotations.split(",")));
+    }
+
+    /** F4.3: 耦合度指标(扇入/扇出 TopN + 上帝类候选) */
+    @GetMapping("/quality/coupling")
+    public Map<String, Object> coupling(@RequestParam String project) {
+        return query.coupling(project);
+    }
+
+    /** F4.4: Git 变更热点(近 200 个 commit) */
+    @GetMapping("/quality/hotspots")
+    public Map<String, Object> hotspots(@RequestParam String project,
+                                          @RequestParam(defaultValue = "20") int limit) {
+        return query.hotspots(project, limit);
+    }
 }

@@ -105,4 +105,36 @@ public class GraphMcpTools {
             @McpToolParam(description = "analyze_project 返回的任务 id") String jobId) {
         return jobs.status(jobId);
     }
+
+    // ==================== F4: 分析维度增强 ====================
+
+    @McpTool(name = "find_rest_endpoint", description = "按路径片段查找 REST 接口的实现位置(HTTP 方法/路径/所属类/方法)。适合回答'这个接口在哪实现'")
+    public List<Map<String, Object>> findRestEndpoint(
+            @McpToolParam(description = "项目名称") String project,
+            @McpToolParam(description = "路径片段,如 /api/projects;传空返回全部端点", required = false) String pathSubstring) {
+        return query.restEndpoints(project, pathSubstring);
+    }
+
+    @McpTool(name = "find_dead_code", description = "死代码检测:无调用者且非入口的方法(已排除构造器/main/REST端点/接口声明/Override/Test)。AI 可据此放心忽略这些方法")
+    public List<Map<String, Object>> findDeadCode(
+            @McpToolParam(description = "项目名称") String project,
+            @McpToolParam(description = "逗号分隔的排除注解名(覆盖默认: Override,Test 系列等)", required = false) String excludeAnnotations) {
+        return query.deadCode(project, excludeAnnotations == null || excludeAnnotations.isBlank()
+                ? null : List.of(excludeAnnotations.split(",")));
+    }
+
+    @McpTool(name = "get_coupling", description = "耦合度指标:被依赖最多(fanIn)/依赖最多(fanOut)的类型 Top15,以及上帝类候选(方法多或超长)。评估改动风险时使用")
+    public Map<String, Object> getCoupling(
+            @McpToolParam(description = "项目名称") String project) {
+        return query.coupling(project);
+    }
+
+    @McpTool(name = "find_hotspots", description = "Git 变更热点:最近 200 个 commit 中变更最频繁的 Java 文件(高频变更=高风险区域)。仅本地路径模式项目可用")
+    public List<Map<String, Object>> findHotspots(
+            @McpToolParam(description = "项目名称") String project,
+            @McpToolParam(description = "返回条数,默认 20,最大 100", required = false) Integer limit) {
+        Object result = query.hotspots(project, limit == null ? 20 : limit);
+        if (result instanceof Map<?, ?> m && m.containsKey("error")) return List.of(Map.of("error", m.get("error")));
+        return (List<Map<String, Object>>) ((Map<?, ?>) result).get("hotspots");
+    }
 }

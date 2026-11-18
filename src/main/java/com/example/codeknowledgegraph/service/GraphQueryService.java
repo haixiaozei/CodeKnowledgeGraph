@@ -17,15 +17,17 @@ import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * 图谱查询:概览、类型详情、影响分析、循环依赖、搜索、调用链。
+ * 图谱查询:概览、类型详情、影响分析、循环依赖、搜索、调用链、质量指标。
  */
 @Service
 public class GraphQueryService {
 
     private final Neo4jClient neo4j;
+    private final GitInfoService git;
 
-    public GraphQueryService(Neo4jClient neo4j) {
+    public GraphQueryService(Neo4jClient neo4j, GitInfoService git) {
         this.neo4j = neo4j;
+        this.git = git;
     }
 
     /** 可视化概览:类型节点 + 类型间关系,可按包过滤 */
@@ -104,7 +106,9 @@ public class GraphQueryService {
                 MATCH (:Type {project: $p, qualifiedName: $qn})-[:HAS_METHOD]->(m:Method)
                 OPTIONAL MATCH (caller:Method)-[:CALLS]->(m)
                 RETURN m.id AS id, m.name AS name, m.signature AS signature, m.returnType AS returnType,
-                       m.visibility AS visibility, m.isStatic AS isStatic, count(caller) AS callers
+                       m.visibility AS visibility, m.isStatic AS isStatic, m.startLine AS startLine,
+                       m.httpMethod AS httpMethod, m.httpPath AS httpPath,
+                       m.annotations AS annotations, count(caller) AS callers
                 ORDER BY m.name
                 """).bindAll(Map.of("p", project, "qn", qn)).fetch().all());
 
@@ -362,5 +366,85 @@ public class GraphQueryService {
                 """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
 
         return result;
+    }
+
+    /**
+     * F4.1: 死代码检测——无调用者且非入口的方法。
+     * 入口规则: 构造器 / main / REST 端点 / 接口声明 / 携带排除注解(默认 Override、Test 系列)。
+     */
+    public List<Map<String, Object>> deadCode(String project, List<String> excludeAnnotations) {
+        List<String> excluded = (excludeAnnotations == null || excludeAnnotations.isEmpty())
+                ? List.of("Override", "Test", "BeforeEach", "BeforeAll", "AfterEach", "AfterAll", "ParameterizedTest")
+                : excludeAnnotations;
+        return List.copyOf(neo4j.query("""
+                MATCH (t:Type {project: $p})-[:HAS_METHOD]->(m:Method)
+                WHERE NOT ( (:Method {project: $p})-[:CALLS]->(m) )
+                  AND NOT m.isConstructor
+                  AND m.name <> 'main'
+                  AND (m.httpPath IS NULL OR m.httpPath = '')
+                  AND t.kind <> 'interface'
+                  AND (m.annotations IS NULL
+                       OR NOT any(a IN m.annotations WHERE a IN $excluded))
+                RETURN m.id AS id, m.signature AS signature, m.visibility AS visibility,
+                       m.startLine AS startLine, t.qualifiedName AS ownerType,
+                       t.simpleName AS ownerSimpleName, t.kind AS ownerKind
+                ORDER BY ownerType, m.name
+                """).bindAll(Map.of("p", project, "excluded", excluded)).fetch().all());
+    }
+
+    /** F4.2: REST 端点索引——按路径片段查找接口实现,q 为空返回全部端点 */
+    public List<Map<String, Object>> restEndpoints(String project, String pathSubstring) {
+        String needle = pathSubstring == null ? "" : pathSubstring.trim();
+        return List.copyOf(neo4j.query("""
+                MATCH (t:Type {project: $p})-[:HAS_METHOD]->(m:Method)
+                WHERE m.httpPath IS NOT NULL AND m.httpPath <> ''
+                  AND ($q = '' OR toLower(m.httpPath) CONTAINS toLower($q))
+                RETURN m.httpMethod AS httpMethod, m.httpPath AS httpPath,
+                       t.qualifiedName AS ownerType, t.simpleName AS ownerSimpleName,
+                       m.signature AS signature, m.id AS methodId, m.filePath AS filePath,
+                       m.startLine AS startLine
+                ORDER BY m.httpPath, m.httpMethod
+                """).bindAll(Map.of("p", project, "q", needle)).fetch().all());
+    }
+
+    /** F4.3: 耦合度指标——扇入/扇出 TopN 与上帝类候选 */
+    public Map<String, Object> coupling(String project) {
+        Collection<Map<String, Object>> fanIn = neo4j.query("""
+                MATCH (a:Type {project: $p})-[r]->(b:Type {project: $p})
+                RETURN b.qualifiedName AS name, b.simpleName AS simpleName,
+                       count(r) AS fanIn, b.lineCount AS lineCount
+                ORDER BY fanIn DESC LIMIT 15
+                """).bind(project).to("p").fetch().all();
+        Collection<Map<String, Object>> fanOut = neo4j.query("""
+                MATCH (a:Type {project: $p})-[r]->(b:Type {project: $p})
+                RETURN a.qualifiedName AS name, a.simpleName AS simpleName,
+                       count(r) AS fanOut, a.lineCount AS lineCount
+                ORDER BY fanOut DESC LIMIT 15
+                """).bind(project).to("p").fetch().all();
+        // 上帝类候选: 方法多或行数大(改动风险与理解成本高)
+        Collection<Map<String, Object>> godClasses = neo4j.query("""
+                MATCH (t:Type {project: $p})-[:HAS_METHOD]->(m:Method)
+                WITH t, count(m) AS methodCount
+                WHERE methodCount >= 30 OR t.lineCount >= 500
+                RETURN t.qualifiedName AS name, t.simpleName AS simpleName,
+                       t.lineCount AS lineCount, methodCount
+                ORDER BY methodCount DESC LIMIT 15
+                """).bind(project).to("p").fetch().all();
+        return Map.of(
+                "mostDepended", List.copyOf(fanIn),
+                "mostDependent", List.copyOf(fanOut),
+                "godClasses", List.copyOf(godClasses));
+    }
+
+    /** F4.4: Git 热点——近期变更最频繁的 Java 文件(仅本地路径模式) */
+    public Map<String, Object> hotspots(String project, int limit) {
+        String rootPath = neo4j.query("MATCH (x:Project {name: $p}) RETURN x.path AS path")
+                .bind(project).to("p").fetch().first()
+                .map(m -> String.valueOf(m.get("path"))).orElse("");
+        if (rootPath.startsWith("file://")) rootPath = rootPath.substring("file://".length());
+        if (rootPath.isBlank() || "null".equals(rootPath) || !Files.isDirectory(Path.of(rootPath))) {
+            return Map.of("error", "热点分析仅支持本地路径模式的项目(Git 模式临时目录已清理)");
+        }
+        return git.gitHotspots(Path.of(rootPath), limit <= 0 ? 20 : Math.min(limit, 100));
     }
 }
