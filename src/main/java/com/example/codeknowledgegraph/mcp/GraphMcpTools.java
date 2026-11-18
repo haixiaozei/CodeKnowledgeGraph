@@ -1,5 +1,6 @@
 package com.example.codeknowledgegraph.mcp;
 
+import com.example.codeknowledgegraph.service.AnalysisJobService;
 import com.example.codeknowledgegraph.service.GraphQueryService;
 import com.example.codeknowledgegraph.service.GraphStoreService;
 import org.springframework.ai.mcp.annotation.McpTool;
@@ -19,10 +20,12 @@ public class GraphMcpTools {
 
     private final GraphQueryService query;
     private final GraphStoreService store;
+    private final AnalysisJobService jobs;
 
-    public GraphMcpTools(GraphQueryService query, GraphStoreService store) {
+    public GraphMcpTools(GraphQueryService query, GraphStoreService store, AnalysisJobService jobs) {
         this.query = query;
         this.store = store;
+        this.jobs = jobs;
     }
 
     @McpTool(name = "list_projects", description = "列出所有已分析入库的项目(名称、来源路径、commit、类型数量)")
@@ -85,5 +88,20 @@ public class GraphMcpTools {
             @McpToolParam(description = "项目名称") String project,
             @McpToolParam(description = "方法 id,格式: 全限定名.方法名(参数个数)") String methodId) {
         return query.methodCallees(project, methodId);
+    }
+
+    // ==================== F2.3: 分析触发(异步) ====================
+
+    @McpTool(name = "analyze_project", description = "分析本地代码目录并建立知识图谱(异步任务,立即返回 jobId)。大仓库需要几分钟,用 get_analysis_status 轮询结果。仅支持本地路径,Git 仓库请先 clone 到本地")
+    public Map<String, Object> analyzeProject(
+            @McpToolParam(description = "项目名称,不传则用目录名推断", required = false) String name,
+            @McpToolParam(description = "本地目录绝对路径,如 /Users/xxx/projects/demo") String path) {
+        return jobs.submit(name, path);
+    }
+
+    @McpTool(name = "get_analysis_status", description = "查询分析任务状态:PENDING/RUNNING 排队或执行中,DONE 返回统计信息,FAILED 返回错误原因")
+    public Map<String, Object> getAnalysisStatus(
+            @McpToolParam(description = "analyze_project 返回的任务 id") String jobId) {
+        return jobs.status(jobId);
     }
 }
