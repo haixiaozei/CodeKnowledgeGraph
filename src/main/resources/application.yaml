@@ -12,3 +12,10 @@ spring:
 
 server:
   port: 8080
+
+# MCP Server(F2.1): Streamable-HTTP 传输,端点 /mcp,供 AI agent(OpenCode/Claude 等)直连
+spring.ai.mcp.server:
+  name: code-knowledge-graph
+  version: 0.1.0
+  type: SYNC
+  protocol: STREAMABLE
