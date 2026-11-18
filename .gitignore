@@ -32,3 +32,6 @@ build/
 ### VS Code ###
 .vscode/
 .DS_Store
+
+### OpenCode(本地 skill 等不提交) ###
+.opencode/
