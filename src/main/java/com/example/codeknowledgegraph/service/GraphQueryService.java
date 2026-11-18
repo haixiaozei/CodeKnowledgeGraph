@@ -222,7 +222,6 @@ public class GraphQueryService {
 
     /** 源码片段读取的行数上限,防止巨型类型撑爆响应 */
     private static final int MAX_SOURCE_LINES = 2000;
-
     /**
      * F1.3: 按类型或方法定位并读取源码文本。
      * 仅支持本地路径模式分析的项目;Git URL 模式分析的临时目录已被清理。
@@ -290,5 +289,78 @@ public class GraphQueryService {
         } catch (IOException e) {
             return Map.of("error", "读取源码失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * F1.4: 上下文包——理解一个类型所需的最小完整信息,供 AI 直接消费。
+     * 组成: 类型元信息(含 Javadoc) + 源码(如可用) + 方法/字段 + 直接依赖(含签名摘要) + 被依赖 + 外部调用关系。
+     */
+    public Map<String, Object> contextPack(String project, String qn) {
+        var type = neo4j.query("""
+                MATCH (t:Type {project: $p, qualifiedName: $qn})
+                RETURN t.qualifiedName AS qualifiedName, t.simpleName AS name, t.kind AS kind,
+                       t.visibility AS visibility, t.isAbstract AS isAbstract, t.lineCount AS lineCount,
+                       t.packageName AS pkg, t.javadoc AS javadoc, t.filePath AS filePath
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().first();
+        if (type.isEmpty()) return Map.of("error", "Type not found: " + qn);
+
+        Map<String, Object> result = new HashMap<>(type.get());
+
+        // 源码(Git URL 模式不可用时置 null,不报错——上下文包其余部分仍有价值)
+        Map<String, Object> src = sourceSnippet(project, qn, null);
+        result.put("source", src.containsKey("error") ? null : src);
+
+        // 方法(含调用者计数与行号,便于跳转)
+        result.put("methods", new ArrayList<>(neo4j.query("""
+                MATCH (:Type {project: $p, qualifiedName: $qn})-[:HAS_METHOD]->(m:Method)
+                OPTIONAL MATCH (caller:Method)-[:CALLS]->(m)
+                RETURN m.id AS id, m.signature AS signature, m.visibility AS visibility,
+                       m.isStatic AS isStatic, m.startLine AS startLine, m.javadoc AS javadoc,
+                       count(caller) AS callers
+                ORDER BY m.startLine
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        // 字段
+        result.put("fields", new ArrayList<>(neo4j.query("""
+                MATCH (:Type {project: $p, qualifiedName: $qn})-[:HAS_FIELD]->(f:Field)
+                RETURN f.name AS name, f.type AS type, f.visibility AS visibility
+                ORDER BY f.name
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        // 直接依赖:关系类型 + 对方 Javadoc + 对方方法签名摘要(最多 30 个)
+        result.put("dependsOn", new ArrayList<>(neo4j.query("""
+                MATCH (a:Type {project: $p, qualifiedName: $qn})-[r]->(b:Type {project: $p})
+                OPTIONAL MATCH (b)-[:HAS_METHOD]->(m:Method)
+                WITH b, type(r) AS kind, collect(DISTINCT m.signature)[..30] AS methodSignatures
+                RETURN b.qualifiedName AS name, kind, b.javadoc AS javadoc, methodSignatures
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        // 被依赖(反向)
+        result.put("dependedBy", new ArrayList<>(neo4j.query("""
+                MATCH (a:Type {project: $p})-[r]->(b:Type {project: $p, qualifiedName: $qn})
+                RETURN a.qualifiedName AS name, type(r) AS kind
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        // 外部调用者:谁调用了本类型的方法(最多 20 条)
+        result.put("methodCallers", new ArrayList<>(neo4j.query("""
+                MATCH (owner:Type {project: $p})-[:HAS_METHOD]->(caller:Method {project: $p})
+                      -[:CALLS]->(m:Method {project: $p})<-[:HAS_METHOD]-(t:Type {project: $p, qualifiedName: $qn})
+                WHERE owner.qualifiedName <> $qn
+                RETURN owner.qualifiedName AS callerType, caller.signature AS callerSignature,
+                       m.signature AS calleeSignature
+                LIMIT 20
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        // 本类型方法的对外调用(最多 20 条)
+        result.put("methodCallees", new ArrayList<>(neo4j.query("""
+                MATCH (t:Type {project: $p, qualifiedName: $qn})-[:HAS_METHOD]->(m:Method {project: $p})
+                      -[:CALLS]->(callee:Method {project: $p})<-[:HAS_METHOD]-(owner:Type {project: $p})
+                WHERE owner.qualifiedName <> $qn
+                RETURN m.signature AS callerSignature, owner.qualifiedName AS calleeType,
+                       callee.signature AS calleeSignature
+                LIMIT 20
+                """).bindAll(Map.of("p", project, "qn", qn)).fetch().all()));
+
+        return result;
     }
 }

@@ -154,4 +154,11 @@ public class ApiController {
                                         @RequestParam(required = false) String method) {
         return query.sourceSnippet(project, qn, method);
     }
+
+    /** F1.4: 上下文包——理解一个类型所需的最小完整信息,供 AI 直接消费 */
+    @GetMapping("/context/{qualifiedName}")
+    public Map<String, Object> contextPack(@PathVariable String qualifiedName,
+                                            @RequestParam String project) {
+        return query.contextPack(project, qualifiedName);
+    }
 }
