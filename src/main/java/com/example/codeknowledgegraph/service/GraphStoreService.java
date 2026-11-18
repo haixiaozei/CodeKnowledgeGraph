@@ -44,16 +44,20 @@ public class GraphStoreService {
 
         // 类型 + 包含关系
         List<Map<String, Object>> typeRows = r.types().stream()
-                .map(t -> Map.<String, Object>of(
-                        "qn", t.qualifiedName(), "name", t.simpleName(), "pkg", t.packageName(),
-                        "kind", t.kind(), "vis", t.visibility(),
-                        "abstract", t.isAbstract(), "lines", t.lineCount()))
+                .map(t -> Map.<String, Object>ofEntries(
+                        Map.entry("qn", t.qualifiedName()), Map.entry("name", t.simpleName()), Map.entry("pkg", t.packageName()),
+                        Map.entry("kind", t.kind()), Map.entry("vis", t.visibility()),
+                        Map.entry("abstract", t.isAbstract()), Map.entry("lines", t.lineCount()),
+                        Map.entry("file", t.filePath() == null ? "" : t.filePath()),
+                        Map.entry("sl", t.startLine()), Map.entry("el", t.endLine()),
+                        Map.entry("javadoc", t.javadoc() == null ? "" : t.javadoc())))
                 .toList();
         neo4j.query("""
                 UNWIND $rows AS row
                 CREATE (t:Type {qualifiedName: row.qn, project: $p})
                 SET t.simpleName = row.name, t.kind = row.kind, t.visibility = row.vis,
-                    t.isAbstract = row.abstract, t.lineCount = row.lines, t.packageName = row.pkg
+                    t.isAbstract = row.abstract, t.lineCount = row.lines, t.packageName = row.pkg,
+                    t.filePath = row.file, t.startLine = row.sl, t.endLine = row.el, t.javadoc = row.javadoc
                 WITH t, row
                 MATCH (pkg:Package {name: row.pkg, project: $p})
                 CREATE (pkg)-[:CONTAINS]->(t)
@@ -61,16 +65,20 @@ public class GraphStoreService {
 
         // 方法
         List<Map<String, Object>> methodRows = r.methods().stream()
-                .map(m -> Map.<String, Object>of(
-                        "id", m.id(), "owner", m.ownerType(), "name", m.name(), "sig", m.signature(),
-                        "ret", m.returnType(), "vis", m.visibility(), "static", m.isStatic(),
-                        "ctor", m.isConstructor()))
+                .map(m -> Map.<String, Object>ofEntries(
+                        Map.entry("id", m.id()), Map.entry("owner", m.ownerType()), Map.entry("name", m.name()), Map.entry("sig", m.signature()),
+                        Map.entry("ret", m.returnType()), Map.entry("vis", m.visibility()), Map.entry("static", m.isStatic()),
+                        Map.entry("ctor", m.isConstructor()),
+                        Map.entry("file", m.filePath() == null ? "" : m.filePath()),
+                        Map.entry("sl", m.startLine()), Map.entry("el", m.endLine()),
+                        Map.entry("javadoc", m.javadoc() == null ? "" : m.javadoc())))
                 .toList();
         neo4j.query("""
                 UNWIND $rows AS row
                 CREATE (m:Method {id: row.id, project: $p})
                 SET m.name = row.name, m.signature = row.sig, m.returnType = row.ret,
-                    m.visibility = row.vis, m.isStatic = row.static, m.isConstructor = row.ctor
+                    m.visibility = row.vis, m.isStatic = row.static, m.isConstructor = row.ctor,
+                    m.filePath = row.file, m.startLine = row.sl, m.endLine = row.el, m.javadoc = row.javadoc
                 WITH m, row
                 MATCH (t:Type {qualifiedName: row.owner, project: $p})
                 CREATE (t)-[:HAS_METHOD]->(m)

@@ -78,8 +78,9 @@ public class CodeAnalyzer {
         for (CompilationUnit cu : units) {
             String pkg = cu.getPackageDeclaration().map(p -> p.getNameAsString()).orElse("");
             if (!pkg.isEmpty()) packages.add(pkg);
+            String filePath = cu.getStorage().map(s -> s.getPath().toString()).orElse(""); // 相对根目录路径
             for (TypeDeclaration<?> td : cu.getTypes()) {
-                collectType(td, pkg, typeMap, methodsByType, fieldsByType, simpleNameToQn);
+                collectType(td, pkg, filePath, typeMap, methodsByType, fieldsByType, simpleNameToQn);
             }
         }
 
@@ -110,7 +111,7 @@ public class CodeAnalyzer {
 
     // ==================== 实体收集 ====================
 
-    private void collectType(TypeDeclaration<?> td, String pkg,
+    private void collectType(TypeDeclaration<?> td, String pkg, String filePath,
                               Map<String, TypeInfo> typeMap,
                               Map<String, List<MethodInfo>> methodsByType,
                               Map<String, List<FieldInfo>> fieldsByType,
@@ -119,8 +120,14 @@ public class CodeAnalyzer {
         if (qn == null || typeMap.containsKey(qn)) return;
 
         String kind = kindOf(td);
+        var range = td.getRange();
         typeMap.put(qn, new TypeInfo(qn, td.getNameAsString(), pkg, kind,
-                visibilityOf(td), isAbstract(td), td.getRange().map(r -> r.end.line - r.begin.line + 1).orElse(0)));
+                visibilityOf(td), isAbstract(td),
+                range.map(r -> r.end.line - r.begin.line + 1).orElse(0),
+                filePath,
+                range.map(r -> r.begin.line).orElse(0),
+                range.map(r -> r.end.line).orElse(0),
+                javadocOf(td)));
         simpleNameToQn.put(td.getNameAsString(), qn);
         methodsByType.put(qn, new ArrayList<>());
         fieldsByType.put(qn, new ArrayList<>());
@@ -133,6 +140,7 @@ public class CodeAnalyzer {
                                 .map(p -> p.getType().asString()).toList());
                 String name = cd.getNameAsString();
                 boolean isCtor = cd.isConstructorDeclaration();
+                var mr = cd.getRange();
                 methodsByType.get(qn).add(new MethodInfo(
                         methodId(qn, name, ((NodeWithParameters<?>) cd).getParameters().size()),
                         qn, name,
@@ -140,7 +148,11 @@ public class CodeAnalyzer {
                         isCtor ? qn.substring(qn.lastIndexOf('.') + 1)
                                 : cd.toMethodDeclaration().map(m -> m.getType().asString()).orElse("void"),
                         visibilityOf(cd), cd.toMethodDeclaration().map(m -> m.isStatic()).orElse(false),
-                        isCtor));
+                        isCtor,
+                        filePath,
+                        mr.map(r -> r.begin.line).orElse(0),
+                        mr.map(r -> r.end.line).orElse(0),
+                        javadocOf(cd)));
             } else if (member instanceof FieldDeclaration fd) {
                 for (VariableDeclarator v : fd.getVariables()) {
                     fieldsByType.get(qn).add(new FieldInfo(
@@ -148,9 +160,18 @@ public class CodeAnalyzer {
                             v.getType().asString(), visibilityOf(fd), fd.isStatic()));
                 }
             } else if (member instanceof TypeDeclaration<?> nested) {
-                collectType(nested, pkg, typeMap, methodsByType, fieldsByType, simpleNameToQn);
+                collectType(nested, pkg, filePath, typeMap, methodsByType, fieldsByType, simpleNameToQn);
             }
         }
+    }
+
+    /** 提取 Javadoc 描述文本:折叠空白并截断到 200 字符(F1.2) */
+    private String javadocOf(com.github.javaparser.ast.nodeTypes.NodeWithJavadoc<?> bd) {
+        return bd.getJavadoc()
+                .map(d -> d.getDescription().toText().strip().replaceAll("\\s+", " "))
+                .filter(s -> !s.isEmpty())
+                .map(s -> s.length() > 200 ? s.substring(0, 200) + "…" : s)
+                .orElse(null);
     }
 
     // ==================== 关系抽取 ====================
@@ -413,14 +434,20 @@ public class CodeAnalyzer {
 
     private List<CompilationUnit> parseAll(JavaParser parser, Path root) throws IOException {
         List<CompilationUnit> units = new ArrayList<>();
+        Path absRoot = root.toAbsolutePath();
         try (Stream<Path> files = Files.walk(root)) {
             files.filter(p -> p.toString().endsWith(".java"))
                     .filter(p -> !p.toString().contains("/target/"))
                     .forEach(p -> {
                         try {
-                            parser.parse(ParseStart.COMPILATION_UNIT,
-                                    Providers.provider(p, java.nio.charset.StandardCharsets.UTF_8))
-                                    .getResult().ifPresent(units::add);
+                            var result = parser.parse(ParseStart.COMPILATION_UNIT,
+                                    Providers.provider(p, java.nio.charset.StandardCharsets.UTF_8));
+                            result.getResult().ifPresent(cu -> {
+                                // 记录相对根目录的路径(F1.1 源码定位用)
+                                cu.setStorage(absRoot.relativize(p.toAbsolutePath()),
+                                        java.nio.charset.StandardCharsets.UTF_8);
+                                units.add(cu);
+                            });
                         } catch (Exception e) {
                             log.warn("解析失败,跳过 {}", p, e);
                         }

@@ -24,7 +24,11 @@ public record AnalysisResult(
             String kind,
             String visibility,
             boolean isAbstract,
-            int lineCount) {}
+            int lineCount,
+            String filePath,      // 相对分析根目录的路径(F1.1)
+            int startLine,        // 声明起始行,1-based(F1.1)
+            int endLine,          // 声明结束行,1-based(F1.1)
+            String javadoc) {}    // Javadoc 描述摘要(F1.2)
 
     /** id 格式: 全限定名.方法名(参数个数) */
     public record MethodInfo(
@@ -35,7 +39,11 @@ public record AnalysisResult(
             String returnType,
             String visibility,
             boolean isStatic,
-            boolean isConstructor) {}
+            boolean isConstructor,
+            String filePath,      // F1.1
+            int startLine,        // F1.1
+            int endLine,          // F1.1
+            String javadoc) {}    // F1.2
 
     /** id 格式: 全限定名.字段名 */
     public record FieldInfo(
