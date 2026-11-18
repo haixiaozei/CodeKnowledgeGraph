@@ -5,7 +5,9 @@ import com.example.codeknowledgegraph.parser.model.AnalysisResult;
 import com.example.codeknowledgegraph.service.GitCloneService;
 import com.example.codeknowledgegraph.service.GraphQueryService;
 import com.example.codeknowledgegraph.service.GraphStoreService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -44,12 +46,7 @@ public class ApiController {
     public ResponseEntity<?> analyzeProject(@RequestBody AnalyzeRequest request) throws Exception {
         // ---- Git URL 模式:克隆到临时目录,分析完清理 ----
         if (request.gitUrl() != null && !request.gitUrl().isBlank()) {
-            GitCloneService.ClonedRepo cloned;
-            try {
-                cloned = gitClone.clone(request.gitUrl(), request.branch());
-            } catch (IllegalArgumentException | IllegalStateException e) {
-                return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-            }
+            GitCloneService.ClonedRepo cloned = gitClone.clone(request.gitUrl(), request.branch());
             try {
                 String name = (request.name() == null || request.name().isBlank())
                         ? cloned.defaultName() : request.name().trim();
@@ -86,6 +83,15 @@ public class ApiController {
     @GetMapping("/projects/{name}/stats")
     public Map<String, Object> stats(@PathVariable String name) {
         return query.projectStats(name);
+    }
+
+    @DeleteMapping("/projects/{name}")
+    public ResponseEntity<?> deleteProject(@PathVariable String name) {
+        if (!store.deleteProject(name)) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "项目不存在: " + name));
+        }
+        return ResponseEntity.ok(Map.of("deleted", name));
     }
 
     // ==================== 图谱查询 ====================

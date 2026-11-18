@@ -135,4 +135,24 @@ public class GraphStoreService {
                         "RETURN x.name AS name, x.path AS path, x.commit AS commit, count(t) AS typeCount")
                 .fetch().all();
     }
+
+    /**
+     * 删除项目及其全部图谱数据(类型/方法/字段/包/关系)。
+     * @return true=删除成功;false=项目不存在
+     */
+    @Transactional
+    public boolean deleteProject(String name) {
+        // 先确认项目存在,避免无效删除
+        Long count = neo4j.query("MATCH (x:Project {name: $name}) RETURN count(x) AS c")
+                .bind(name).to("name").fetchAs(Long.class).one().orElse(0L);
+        if (count == 0) {
+            return false;
+        }
+        // 删除 Project 节点 + 所有携带该 project 属性的节点(含关系,DETACH DELETE)
+        neo4j.query("MATCH (x:Project {name: $name}) DETACH DELETE x")
+                .bind(name).to("name").run();
+        neo4j.query("MATCH (n) WHERE n.project = $name DETACH DELETE n")
+                .bind(name).to("name").run();
+        return true;
+    }
 }

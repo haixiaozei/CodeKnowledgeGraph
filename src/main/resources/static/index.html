@@ -72,6 +72,7 @@
   <select id="project-select"><option value="">选择项目…</option></select>
   <input id="search-input" placeholder="搜索类名/方法名…" autocomplete="off">
   <button id="btn-analyze" class="ghost">分析项目</button>
+  <button id="btn-delete" class="ghost">删除项目</button>
   <button id="btn-packages" class="ghost">按包过滤</button>
   <button id="btn-cycles" class="ghost">循环依赖</button>
   <button id="btn-refresh" class="ghost">刷新图谱</button>
@@ -120,6 +121,7 @@ window.addEventListener('load', async () => {
   await loadProjects();
   $('search-input').addEventListener('input', onSearchInput);
   $('btn-analyze').addEventListener('click', onAnalyze);
+  $('btn-delete').addEventListener('click', onDeleteProject);
   $('btn-cycles').addEventListener('click', onCycles);
   $('btn-refresh').addEventListener('click', () => currentProject && enterProjectView(currentProject));
   $('project-select').addEventListener('change', e => e.target.value && enterProjectView(e.target.value));
@@ -212,6 +214,19 @@ async function loadProjects() {
   sel.innerHTML = '<option value="">选择项目…</option>' +
     projects.map(p => `<option value="${p.name}">${p.name} (${p.typeCount} 类型${p.commit ? ' @' + p.commit : ''})</option>`).join('');
   if (!currentProject && projects.length) { currentProject = projects[0].name; $('project-select').value = currentProject; enterProjectView(currentProject); }
+}
+
+async function onDeleteProject() {
+  if (!currentProject) { toast('请先选择项目'); return; }
+  const name = currentProject;
+  if (!confirm(`确定删除项目「${name}」的全部图谱数据?\n此操作不可恢复,需要时可重新分析。`)) return;
+  const res = await fetch('/api/projects/' + encodeURIComponent(name), { method: 'DELETE' }).then(r => r.json());
+  if (res.error) { toast('删除失败: ' + res.error, 5000); return; }
+  toast('已删除: ' + name, 5000);
+  currentProject = '';
+  if (graph) graph.clear();
+  $('panel').innerHTML = '<div class="empty">点击图中的节点查看类型详情</div>';
+  await loadProjects();
 }
 
 function onAnalyze() {
