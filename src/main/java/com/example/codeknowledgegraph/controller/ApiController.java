@@ -146,4 +146,12 @@ public class ApiController {
     public List<Map<String, Object>> callees(@PathVariable String id, @RequestParam String project) {
         return query.methodCallees(project, id);
     }
+
+    /** F1.3: 源码片段——按类型(或方法)定位并读取源码文本 */
+    @GetMapping("/source")
+    public Map<String, Object> source(@RequestParam String project,
+                                        @RequestParam String qn,
+                                        @RequestParam(required = false) String method) {
+        return query.sourceSnippet(project, qn, method);
+    }
 }

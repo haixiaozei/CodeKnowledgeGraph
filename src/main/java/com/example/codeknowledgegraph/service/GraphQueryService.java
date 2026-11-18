@@ -3,8 +3,13 @@ package com.example.codeknowledgegraph.service;
 import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -213,5 +218,77 @@ public class GraphQueryService {
                 RETURN x.name AS project, types, methods, count(c) AS calls
                 """).bind(project).to("p").fetch().first();
         return counts.orElse(Map.of("project", project));
+    }
+
+    /** 源码片段读取的行数上限,防止巨型类型撑爆响应 */
+    private static final int MAX_SOURCE_LINES = 2000;
+
+    /**
+     * F1.3: 按类型或方法定位并读取源码文本。
+     * 仅支持本地路径模式分析的项目;Git URL 模式分析的临时目录已被清理。
+     */
+    public Map<String, Object> sourceSnippet(String project, String qn, String methodId) {
+        boolean isMethod = methodId != null && !methodId.isBlank();
+        // 1. 定位节点(方法优先)
+        Map<String, Object> node;
+        if (isMethod) {
+            node = neo4j.query("""
+                    MATCH (t:Type {project: $p, qualifiedName: $qn})-[:HAS_METHOD]->(m:Method {project: $p, id: $id})
+                    RETURN m.id AS id, m.signature AS name, m.filePath AS filePath,
+                           m.startLine AS startLine, m.endLine AS endLine
+                    """).bindAll(Map.of("p", project, "qn", qn, "id", methodId))
+                    .fetch().first().orElse(null);
+        } else {
+            node = neo4j.query("""
+                    MATCH (t:Type {project: $p, qualifiedName: $qn})
+                    RETURN t.qualifiedName AS id, t.simpleName AS name, t.filePath AS filePath,
+                           t.startLine AS startLine, t.endLine AS endLine
+                    """).bindAll(Map.of("p", project, "qn", qn))
+                    .fetch().first().orElse(null);
+        }
+        if (node == null) return Map.of("error", "Not found: " + (isMethod ? methodId : qn));
+
+        // 2. 项目根路径(仅本地路径模式可读取源码)
+        String rootPath = neo4j.query("MATCH (x:Project {name: $p}) RETURN x.path AS path")
+                .bind(project).to("p").fetch().first()
+                .map(m -> String.valueOf(m.get("path"))).orElse("");
+        if (rootPath.startsWith("file://")) rootPath = rootPath.substring("file://".length());
+        if (rootPath.isBlank() || "null".equals(rootPath) || !Files.isDirectory(Path.of(rootPath))) {
+            return Map.of("error", "源码不可用: 该项目按 Git URL 分析,临时目录已清理,请使用本地路径模式重新分析");
+        }
+
+        // 3. 校验文件路径(防目录穿越)
+        Object filePathRaw = node.get("filePath");
+        if (filePathRaw == null || String.valueOf(filePathRaw).isBlank()) {
+            return Map.of("error", "该节点没有源码位置信息,请重新分析项目以升级数据");
+        }
+        Path file = Path.of(rootPath).resolve(String.valueOf(filePathRaw)).normalize();
+        if (!file.startsWith(Path.of(rootPath).normalize()) || !Files.isRegularFile(file)) {
+            return Map.of("error", "源码文件不存在: " + filePathRaw);
+        }
+
+        // 4. 读取行范围(1-based 含端点;老数据无行号时读全文件)
+        try {
+            List<String> allLines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            int from = node.get("startLine") instanceof Number n ? n.intValue() : 1;
+            int to = node.get("endLine") instanceof Number n ? n.intValue() : allLines.size();
+            from = Math.max(1, Math.min(from, allLines.size()));
+            to = Math.max(from, Math.min(to, allLines.size()));
+            boolean truncated = false;
+            if (to - from + 1 > MAX_SOURCE_LINES) { to = from + MAX_SOURCE_LINES - 1; truncated = true; }
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("id", node.get("id"));
+            result.put("name", node.get("name"));
+            result.put("filePath", String.valueOf(filePathRaw));
+            result.put("startLine", from);
+            result.put("endLine", to);
+            result.put("totalLines", allLines.size());
+            result.put("truncated", truncated);
+            result.put("source", String.join("\n", allLines.subList(from - 1, to)));
+            return result;
+        } catch (IOException e) {
+            return Map.of("error", "读取源码失败: " + e.getMessage());
+        }
     }
 }
