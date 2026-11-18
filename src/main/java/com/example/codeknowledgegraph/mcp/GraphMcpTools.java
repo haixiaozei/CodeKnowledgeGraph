@@ -115,7 +115,7 @@ public class GraphMcpTools {
         return query.restEndpoints(project, pathSubstring);
     }
 
-    @McpTool(name = "find_dead_code", description = "死代码检测:无调用者且非入口的方法(已排除构造器/main/REST端点/接口声明/Override/Test)。AI 可据此放心忽略这些方法")
+    @McpTool(name = "find_dead_code", description = "死代码检测:无调用者且非入口的方法(已排除构造器/main/REST端点/接口声明/Override/Test等)。每项附带 suggestion 处置建议与置信度:高置信可建议用户删除,低置信(public)可能是外部 API 或'忘记接线'的功能,应提示用户人工确认而非直接删除。反射调用无法识别")
     public List<Map<String, Object>> findDeadCode(
             @McpToolParam(description = "项目名称") String project,
             @McpToolParam(description = "逗号分隔的排除注解名(覆盖默认: Override,Test 系列等)", required = false) String excludeAnnotations) {

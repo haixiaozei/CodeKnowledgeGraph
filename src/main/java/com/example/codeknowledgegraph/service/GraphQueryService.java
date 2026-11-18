@@ -389,10 +389,40 @@ public class GraphQueryService {
                   AND (m.annotations IS NULL
                        OR NOT any(a IN m.annotations WHERE a IN $excluded))
                 RETURN m.id AS id, m.signature AS signature, m.visibility AS visibility,
-                       m.startLine AS startLine, t.qualifiedName AS ownerType,
+                       m.startLine AS startLine, m.filePath AS filePath,
+                       t.qualifiedName AS ownerType,
                        t.simpleName AS ownerSimpleName, t.kind AS ownerKind
                 ORDER BY ownerType, m.name
-                """).bindAll(Map.of("p", project, "excluded", excluded)).fetch().all());
+                """).bindAll(Map.of("p", project, "excluded", excluded)).fetch().all())
+                .stream().map(m -> {
+                    // 驱动返回的 Map 不可变,复制后再附加建议
+                    Map<String, Object> row = new HashMap<>(m);
+                    row.put("suggestion", deadCodeSuggestion(m));
+                    return row;
+                }).toList();
+    }
+
+    /** F4.1: 按元数据推导处置建议(静态规则,避免误把"忘接线"当垃圾) */
+    private String deadCodeSuggestion(Map<String, Object> m) {
+        String vis = String.valueOf(m.get("visibility"));
+        String file = String.valueOf(m.getOrDefault("filePath", ""));
+        String sig = String.valueOf(m.get("signature"));
+        String name = sig.contains("(") ? sig.substring(0, sig.indexOf('(')) : sig;
+        if (file.contains("/test/")) {
+            return "测试辅助方法,建议保留";
+        }
+        if ((name.startsWith("get") || name.startsWith("set") || name.startsWith("is"))
+                && name.length() > 3 && Character.isUpperCase(name.charAt(3))) {
+            return "疑似 getter/setter: 注意 Jackson 等反射序列化依赖,核对后再处理";
+        }
+        switch (vis) {
+            case "private": case "package-private":
+                return "高置信: 确认无反射调用后可删除(稳妥流程: 先加 @Deprecated 观察一个版本)";
+            case "public":
+                return "低置信: 可能是外部 API、反射入口或'忘记接线'的功能——先查 git 历史与调用方,再决定 @Deprecated 或删除";
+            default:
+                return "中置信: 确认无反射/框架回调后删除";
+        }
     }
 
     /** F4.2: REST 端点索引——按路径片段查找接口实现,q 为空返回全部端点 */

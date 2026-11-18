@@ -485,10 +485,11 @@ async function onDeadCode() {
     $('modal').innerHTML = `<h3>✅ 未发现死代码</h3><div class="empty" style="margin:0">所有方法都有调用者或属于入口(端点/main/接口/Override 等)</div>`;
   } else {
     $('modal').innerHTML = `<h3>🔍 发现 ${list.length} 个疑似死代码方法(点击跳转到所属类)</h3>` +
-      `<div style="font-size:11px;color:var(--muted);margin-bottom:10px">规则: 无调用者且非入口(构造器/main/REST端点/接口声明/Override、Test 系列注解)。反射调用无法识别,请人工复核。</div>` +
+      `<div style="font-size:11px;color:var(--muted);margin-bottom:10px">规则: 无调用者且非入口。每项附处置建议——<b style="color:#f87171">高置信</b>可走 @Deprecated→观察→删除流程;<b style="color:#fbbf24">低置信(public)</b>可能是外部 API 或忘记接线的功能,先人工确认。</div>` +
       list.map(m => `<div class="cycle-item" onclick="focusNode('${esc(m.ownerType)}');showTypeDetail('${esc(m.ownerType)}')">
         <span style="color:${m.visibility === 'private' ? '#f87171' : '#fbbf24'}">${m.visibility}</span>
-        ${esc(m.ownerSimpleName)} · ${esc(m.signature)} <span style="color:var(--muted)">@行 ${m.startLine}</span></div>`).join('');
+        ${esc(m.ownerSimpleName)} · ${esc(m.signature)} <span style="color:var(--muted)">@行 ${m.startLine}</span>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">💡 ${esc(m.suggestion || '')}</div></div>`).join('');
   }
   $('modal-mask').style.display = 'flex';
 }
