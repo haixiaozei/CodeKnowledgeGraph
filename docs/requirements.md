@@ -116,11 +116,14 @@
 
 **目标：从 Java 专用走向通用。**
 
-| 编号 | 需求 | 说明 |
-|------|------|------|
-| F5.1 | tree-sitter 解析器 | Python / TypeScript / Go 的结构解析与调用提取（架构上抽象出 `LanguageParser` 接口，现有 JavaParser 实现成为其一） |
-| F5.2 | 语义搜索 | 方法/类型 embedding + 向量检索，支持"找做 X 事的代码" |
-| F5.3 | 团队共享 | 中心化部署 + 项目级隔离 + 鉴权（脱离单机工具定位后再做） |
+| 编号 | 需求 | 状态 | 说明 |
+|------|------|------|------|
+| F5.1a | Python 解析器(tree-sitter) | ✅ 已交付 | LanguageParser 接口抽象;module/class/函数/docstring/装饰器(路由→REST 端点);按名启发式调用边;全量+增量双管道;真实项目(requests)验证通过 |
+| F5.1b | TypeScript / Go 解析器 | ⬜ 待做 | 照 Python 模式各写一个 LanguageParser 实现;tree-sitter 依赖已就位 |
+| F5.2 | 语义搜索 | ⬜ 未开始 | 方法/类型 embedding + 向量检索,支持"找做 X 事的代码"。前置条件: 需选定 embedding 提供方(OpenAI 兼容接口/API Key) |
+| F5.3 | 团队共享 | ⬜ 未开始 | 中心化部署 + 项目级隔离 + 鉴权(脱离单机工具定位后再做) |
+
+已知简化(不阻塞,按需迭代): Python 相对导入(`from . import x`)的 DEPENDS_ON 未解析;`src/` 布局项目的模块名带 `src.` 前缀;Python 调用为按名启发式,动态分发场景(鸭子类型)无法保证精确。
 
 ---
 
