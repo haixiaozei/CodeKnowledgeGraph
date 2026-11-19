@@ -33,11 +33,12 @@ public interface LanguageParser {
             List<TypeInfo> types,
             List<MethodInfo> methods,
             List<FieldInfo> fields,
+            List<String> packages,            // 本文件所属的包名(目录推导)
             List<Edge> localEdges,            // 文件内可确定的边(如 EXTENDS 到同文件基类)
             List<NameRef> unresolvedCalls,    // callerId -> 被调名称(含接收者提示)
             List<NameRef> unresolvedImports) {
 
-        /** 未解析引用:from 方法/类型 -> 名称(可能是函数名或 类名.方法名) */
-        public record NameRef(String from, String name) {}
+        /** 未解析引用:from 方法/类型 -> 名称(可能是函数名或 类名.方法名);argCount=-1 表示未知(装饰器/导入) */
+        public record NameRef(String from, String name, int argCount) {}
     }
 }

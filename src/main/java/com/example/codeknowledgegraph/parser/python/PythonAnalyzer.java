@@ -74,7 +74,7 @@ public class PythonAnalyzer implements LanguageParser {
         log.debug("[python] {}: {} 类型 / {} 方法 / {} 调用引用",
                 file.getFileName(), types.size(), methods.size(), calls.size());
         return new FileStructure("python", moduleQn, types, methods, fields,
-                localEdges, calls, imports);
+                new ArrayList<>(packages), localEdges, calls, imports);
     }
 
     // ==================== 遍历 ====================
@@ -212,7 +212,11 @@ public class PythonAnalyzer implements LanguageParser {
             TSNode fn = fieldNode(node, "function");
             if (fn != null) {
                 String ref = callRef(fn, bytes);
-                if (ref != null) calls.add(new FileStructure.NameRef(fromMethodId, ref));
+                if (ref != null) {
+                    TSNode args = fieldNode(node, "arguments");
+                    int argCount = args == null ? 0 : args.getNamedChildCount();
+                    calls.add(new FileStructure.NameRef(fromMethodId, ref, argCount));
+                }
             }
         }
         for (int i = 0; i < node.getNamedChildCount(); i++) {
@@ -241,7 +245,7 @@ public class PythonAnalyzer implements LanguageParser {
             if (t.equals("dotted_name") || t.equals("aliased_import")) {
                 String name = text(c, bytes);
                 if (name != null && !name.isBlank()) {
-                    imports.add(new FileStructure.NameRef("", name.strip()));
+                    imports.add(new FileStructure.NameRef("", name.strip(), -1));
                 }
             }
         }
@@ -251,7 +255,7 @@ public class PythonAnalyzer implements LanguageParser {
                                       List<FileStructure.NameRef> calls) {
         String d = decorator.startsWith("@") ? decorator.substring(1) : decorator;
         int paren = d.indexOf('(');
-        if (paren > 0) calls.add(new FileStructure.NameRef(owner, d.substring(0, paren)));
+        if (paren > 0) calls.add(new FileStructure.NameRef(owner, d.substring(0, paren), -1));
     }
 
     // ==================== REST 端点(FastAPI/Flask 风格装饰器) ====================

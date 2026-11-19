@@ -133,6 +133,7 @@
       <div><span class="dot" style="background:#059669"></span>interface</div>
       <div><span class="dot" style="background:#d97706"></span>enum</div>
       <div><span class="dot" style="background:#7c3aed"></span>record</div>
+      <div><span class="dot" style="background:#64748b"></span>module</div>
     </div>
   </div>
   <div id="panel" class="collapsed"><div class="empty">点击图中的节点查看类型详情</div></div>
@@ -142,7 +143,7 @@
 <div id="toast"></div>
 
 <script>
-const COLORS = { class: '#2563eb', interface: '#059669', enum: '#d97706', record: '#7c3aed' };
+const COLORS = { class: '#2563eb', interface: '#059669', enum: '#d97706', record: '#7c3aed', module: '#64748b', function: '#0891b2' };
 const EDGE_COLORS = { EXTENDS: '#f87171', IMPLEMENTS: '#34d399', DEPENDS_ON: '#5a6b8c', CALLS: '#60a5fa' };
 let graph = null, currentProject = '';
 let activePackages = new Set();          // 选中的包;空 = 显示全部
