@@ -8,8 +8,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -100,5 +102,33 @@ public class GitInfoService {
         String out = new String(p.getInputStream().readAllBytes());
         p.waitFor(1, TimeUnit.MINUTES);
         return p.exitValue() == 0 ? out.strip() : "";
+    }
+
+    /**
+     * F4.4: Git 热点——最近 200 个 commit 中变更最频繁的 Java 文件。
+     * 高频变更 = 高风险区域;浅克隆仓库只有 1 个 commit,信号弱但不报错。
+     */
+    public Map<String, Object> gitHotspots(Path root, int limit) {
+        if (!Files.exists(root.resolve(".git"))) {
+            return Map.of("error", "该目录不是 git 仓库,无法统计变更热点");
+        }
+        try {
+            String log = runGit(root, "log", "-n", "200", "--name-only", "--pretty=format:");
+            Map<String, Integer> counts = new java.util.HashMap<>();
+            int commitCount = 0;
+            for (String line : log.split("\n")) {
+                String t = line.strip();
+                if (t.isEmpty()) { commitCount++; continue; }
+                if (t.endsWith(".java")) counts.merge(t, 1, Integer::sum);
+            }
+            List<Map<String, Object>> top = counts.entrySet().stream()
+                    .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
+                    .limit(limit)
+                    .map(e -> Map.<String, Object>of("file", e.getKey(), "changes", e.getValue()))
+                    .toList();
+            return Map.of("commits", commitCount, "changedFiles", counts.size(), "hotspots", top);
+        } catch (Exception e) {
+            return Map.of("error", "git 统计失败: " + e.getMessage());
+        }
     }
 }

@@ -43,7 +43,10 @@ public record AnalysisResult(
             String filePath,      // F1.1
             int startLine,        // F1.1
             int endLine,          // F1.1
-            String javadoc) {}    // F1.2
+            String javadoc,       // F1.2
+            List<String> annotations, // F4.1/F4.2: 注解简单名列表(Override/Test/GetMapping...)
+            String httpMethod,        // F4.2: REST 方法(GET/POST/...),非端点为 null
+            String httpPath) {}       // F4.2: REST 完整路径,非端点为 null
 
     /** id 格式: 全限定名.字段名 */
     public record FieldInfo(

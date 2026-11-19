@@ -154,13 +154,16 @@ public class GraphStoreService {
                 MATCH (t:Type {project: $p})-[:HAS_METHOD]->(m:Method)
                 WHERE NOT coalesce(t.filePath, '') IN $ex
                 RETURN m.id AS id, t.qualifiedName AS owner, m.name AS name,
-                       m.isConstructor AS ctor, m.filePath AS file
+                       m.isConstructor AS ctor, m.filePath AS file,
+                       m.annotations AS anns, m.httpMethod AS hm, m.httpPath AS hp
                 """).bind(project).to("p").bind(excludeFiles).to("ex").fetch().all();
         return rows.stream().map(r -> new MethodInfo(
                 (String) r.get("id"), (String) r.get("owner"), (String) r.get("name"),
                 r.get("name") + "(seed)", "", "", false,
                 Boolean.TRUE.equals(r.get("ctor")),
-                (String) r.get("file"), 0, 0, null)).toList();
+                (String) r.get("file"), 0, 0, null,
+                r.get("anns") instanceof List<?> l ? l.stream().map(String::valueOf).toList() : List.of(),
+                (String) r.get("hm"), (String) r.get("hp"))).toList();
     }
 
     // ==================== 写入器(全量/增量共用) ====================
@@ -217,14 +220,18 @@ public class GraphStoreService {
                         Map.entry("ctor", m.isConstructor()),
                         Map.entry("file", m.filePath() == null ? "" : m.filePath()),
                         Map.entry("sl", m.startLine()), Map.entry("el", m.endLine()),
-                        Map.entry("javadoc", m.javadoc() == null ? "" : m.javadoc())))
+                        Map.entry("javadoc", m.javadoc() == null ? "" : m.javadoc()),
+                        Map.entry("anns", m.annotations() == null ? List.of() : m.annotations()),
+                        Map.entry("hm", m.httpMethod() == null ? "" : m.httpMethod()),
+                        Map.entry("hp", m.httpPath() == null ? "" : m.httpPath())))
                 .toList();
         neo4j.query("""
                 UNWIND $rows AS row
                 CREATE (m:Method {id: row.id, project: $p})
                 SET m.name = row.name, m.signature = row.sig, m.returnType = row.ret,
                     m.visibility = row.vis, m.isStatic = row.static, m.isConstructor = row.ctor,
-                    m.filePath = row.file, m.startLine = row.sl, m.endLine = row.el, m.javadoc = row.javadoc
+                    m.filePath = row.file, m.startLine = row.sl, m.endLine = row.el, m.javadoc = row.javadoc,
+                    m.annotations = row.anns, m.httpMethod = row.hm, m.httpPath = row.hp
                 WITH m, row
                 MATCH (t:Type {qualifiedName: row.owner, project: $p})
                 CREATE (t)-[:HAS_METHOD]->(m)

@@ -233,6 +233,10 @@ public class CodeAnalyzer {
         fieldsByType.put(qn, new ArrayList<>());
 
         // 方法与构造器
+        boolean isController = td.getAnnotations().stream()
+                .anyMatch(a -> Set.of("RestController", "Controller").contains(simpleAnnotationName(a)));
+        String basePath = mappingAnnotationValue(td, "RequestMapping");
+
         for (BodyDeclaration<?> member : td.getMembers()) {
             if (member instanceof CallableDeclaration<?> cd) {
                 String params = String.join(", ",
@@ -241,6 +245,9 @@ public class CodeAnalyzer {
                 String name = cd.getNameAsString();
                 boolean isCtor = cd.isConstructorDeclaration();
                 var mr = cd.getRange();
+                List<String> annotations = cd.getAnnotations().stream()
+                        .map(CodeAnalyzer::simpleAnnotationName).toList();
+                String[] rest = restEndpoint(isController, basePath, cd);
                 methodsByType.get(qn).add(new MethodInfo(
                         methodId(qn, name, ((NodeWithParameters<?>) cd).getParameters().size()),
                         qn, name,
@@ -252,7 +259,10 @@ public class CodeAnalyzer {
                         filePath,
                         mr.map(r -> r.begin.line).orElse(0),
                         mr.map(r -> r.end.line).orElse(0),
-                        javadocOf(cd)));
+                        javadocOf(cd),
+                        annotations,
+                        rest[0],
+                        rest[1]));
             } else if (member instanceof FieldDeclaration fd) {
                 for (VariableDeclarator v : fd.getVariables()) {
                     fieldsByType.get(qn).add(new FieldInfo(
@@ -272,6 +282,64 @@ public class CodeAnalyzer {
                 .filter(s -> !s.isEmpty())
                 .map(s -> s.length() > 200 ? s.substring(0, 200) + "…" : s)
                 .orElse(null);
+    }
+
+    // ==================== REST 端点提取(F4.2) ====================
+
+    private static final Set<String> HTTP_MAPPING_ANNOTATIONS =
+            Set.of("GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping");
+
+    /** 注解简单名(去包前缀) */
+    private static String simpleAnnotationName(com.github.javaparser.ast.expr.AnnotationExpr a) {
+        String n = a.getNameAsString();
+        return n.substring(n.lastIndexOf('.') + 1);
+    }
+
+    /** 提取类型上 @RequestMapping 的路径(作为控制器基路径),没有则返回空串 */
+    private String mappingAnnotationValue(TypeDeclaration<?> td, String annotationName) {
+        return td.getAnnotations().stream()
+                .filter(a -> simpleAnnotationName(a).equals(annotationName))
+                .map(this::annotationPath).findFirst().orElse("");
+    }
+
+    /** 从注解提取路径:支持 @Xxx("/p") 与 @Xxx(value="/p") / @Xxx(path="/p") */
+    private String annotationPath(com.github.javaparser.ast.expr.AnnotationExpr a) {
+        if (a instanceof com.github.javaparser.ast.expr.SingleMemberAnnotationExpr s) {
+            return stripQuotes(s.getMemberValue().toString());
+        }
+        if (a instanceof com.github.javaparser.ast.expr.NormalAnnotationExpr n) {
+            return n.getPairs().stream()
+                    .filter(p -> p.getNameAsString().equals("value") || p.getNameAsString().equals("path"))
+                    .map(p -> stripQuotes(p.getValue().toString()))
+                    .findFirst().orElse("");
+        }
+        return "";
+    }
+
+    /** 去掉字符串字面量的引号 */
+    private static String stripQuotes(String raw) {
+        String v = raw.strip();
+        if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) v = v.substring(1, v.length() - 1);
+        return v;
+    }
+
+    /**
+     * 计算方法的 REST 端点:返回 [httpMethod, httpPath],非端点返回 [null, null]。
+     * 类级 @RequestMapping 作为基路径;类需为 @RestController/@Controller 或方法带映射注解。
+     */
+    private String[] restEndpoint(boolean isController, String basePath, CallableDeclaration<?> cd) {
+        var mapping = cd.getAnnotations().stream()
+                .filter(a -> HTTP_MAPPING_ANNOTATIONS.contains(simpleAnnotationName(a)))
+                .findFirst();
+        if (mapping.isEmpty()) return new String[]{null, null};
+        String annName = simpleAnnotationName(mapping.get());
+        String httpMethod = annName.equals("RequestMapping") ? "ANY"
+                : annName.replace("Mapping", "").toUpperCase();
+        String path = annotationPath(mapping.get());
+        String full = (basePath.isEmpty() ? "" : basePath) + (path.isEmpty() ? "" : path);
+        if (!full.startsWith("/")) full = "/" + full;
+        if (!isController && basePath.isEmpty()) return new String[]{null, null}; // 非控制器类上的映射注解不视为端点
+        return new String[]{httpMethod, full};
     }
 
     // ==================== 关系抽取 ====================
@@ -316,7 +384,7 @@ public class CodeAnalyzer {
             // 1. 符号求解器精确解析
             String resolved = tryResolveCall(call);
             if (resolved != null) {
-                addCallEdge(callerId, resolved, methodsByType, callEdges, callEdgeSet,
+                addCallEdge(callerId, call, resolved, methodsByType, callEdges, callEdgeSet,
                         qn, typeMap, typeEdges, typeEdgeSet);
             } else {
                 // 2. 启发式:推断接收者变量类型
@@ -351,7 +419,7 @@ public class CodeAnalyzer {
     }
 
     /** 调用边落在图内类型上时,按 方法名+参数个数 匹配目标方法 */
-    private void addCallEdge(String callerId, String declaringType,
+    private void addCallEdge(String callerId, MethodCallExpr call, String declaringType,
                              Map<String, List<MethodInfo>> methodsByType,
                              List<Edge> callEdges, Set<String> callEdgeSet,
                              String sourceType, Map<String, TypeInfo> typeMap,
@@ -361,7 +429,8 @@ public class CodeAnalyzer {
             if (!methodsByType.containsKey(declaringType)) return;
             addTypeEdge(sourceType, declaringType, AnalysisResult.DEPENDS_ON, typeEdges, typeEdgeSet);
         }
-        matchCallByName(callerId, null, declaringType, methodsByType, callEdges, callEdgeSet);
+        // 修复: 必须携带 call(方法名+参数个数),否则会错误匹配到声明类型的第一个方法
+        matchCallByName(callerId, call, declaringType, methodsByType, callEdges, callEdgeSet);
     }
 
     private void matchCallByName(String callerId, MethodCallExpr call, String declaringType,
@@ -389,10 +458,11 @@ public class CodeAnalyzer {
                                           Map<String, TypeInfo> typeMap,
                                           Map<String, String> simpleNameToQn, String currentType) {
         var scope = call.getScope();
-        if (scope.isEmpty()) return null;
+        if (scope.isEmpty()) return currentType; // 无作用域调用(直接 method())默认属于当前类
         final String varName;
         if (scope.get() instanceof NameExpr ne) {
             varName = ne.getNameAsString();
+            if (varName.equals("this")) return currentType;
         } else if (scope.get() instanceof ObjectCreationExpr oc) {
             return resolveTypeName(oc.getType().asString(), cu, typeMap, simpleNameToQn);
         } else {
