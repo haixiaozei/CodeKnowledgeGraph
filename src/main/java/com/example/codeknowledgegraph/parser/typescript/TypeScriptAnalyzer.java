@@ -41,6 +41,11 @@ public class TypeScriptAnalyzer implements LanguageParser {
 
     @Override
     public FileStructure parseFile(Path root, Path file) throws Exception {
+        // .d.ts 是类型声明文件,会产生大量重复模块,不入图
+        if (file.getFileName().toString().endsWith(".d.ts")) {
+            return new FileStructure("typescript", "", List.of(), List.of(), List.of(),
+                    List.of(), List.of(), List.of(), List.of());
+        }
         String source = Files.readString(file, StandardCharsets.UTF_8);
         byte[] bytes = source.getBytes(StandardCharsets.UTF_8);
         boolean isTsx = file.toString().endsWith(".tsx");

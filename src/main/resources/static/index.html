@@ -364,6 +364,8 @@ function createGraph(nodes, edges) {
     })),
   });
   graph.render();
+  // 布局完成后自动缩放适配画布,否则大图节点可能散布在视口外
+  graph.on('afterlayout', () => { try { graph.fitView(20); } catch (e) { /* 忽略 */ } });
   graph.on('node:click', e => showTypeDetail(e.item.getModel().id));
   graph.on('node:mouseenter', e => {
     const model = e.item.getModel(), tip = $('tooltip');

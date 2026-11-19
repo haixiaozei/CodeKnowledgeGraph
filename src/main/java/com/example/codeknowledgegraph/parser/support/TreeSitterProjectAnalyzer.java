@@ -172,8 +172,31 @@ public class TreeSitterProjectAnalyzer {
             }
 
             // 3. DEPENDS_ON: 导入的模块/类若在图内
+            //    相对导入('./x'、'../y')按导入方模块的包路径换算成候选全限定名
             for (FileStructure.NameRef ref : s.unresolvedImports()) {
-                TypeInfo target = index.typesByQn().get(ref.name());
+                String name = ref.name();
+                TypeInfo target = index.typesByQn().get(name);
+                if (target == null && name.startsWith(".")) {
+                    String pkg = s.moduleQn().contains(".")
+                            ? s.moduleQn().substring(0, s.moduleQn().lastIndexOf('.'))
+                            : s.moduleQn();
+                    String rest = name;
+                    while (rest.startsWith("./")) rest = rest.substring(2);
+                    while (rest.startsWith("../")) {
+                        int dot = pkg.lastIndexOf('.');
+                        pkg = dot < 0 ? "" : pkg.substring(0, dot);
+                        rest = rest.substring(3);
+                    }
+                    // TS ESM 风格相对导入带 .js 后缀(源文件是 .ts)
+                    if (rest.endsWith(".js")) rest = rest.substring(0, rest.length() - 3);
+                    if (rest.endsWith("/index")) rest = rest.substring(0, rest.length() - "/index".length());
+                    String candidate = pkg.isEmpty() ? rest : pkg + "." + rest;
+                    target = index.typesByQn().get(candidate);
+                    if (target == null) {
+                        // 候选模块本身不存在时,尝试该路径下的类型(简名拼接)
+                        target = index.typesBySimple().get(rest);
+                    }
+                }
                 if (target == null) continue;
                 if (!target.qualifiedName().equals(s.moduleQn())) {
                     addEdge(typeEdges, typeDedup,
