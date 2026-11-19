@@ -1,5 +1,6 @@
-package com.example.codeknowledgegraph.parser.python;
+package com.example.codeknowledgegraph.parser.support;
 
+import com.example.codeknowledgegraph.parser.LanguageParser;
 import com.example.codeknowledgegraph.parser.LanguageParser.FileStructure;
 import com.example.codeknowledgegraph.parser.model.AnalysisResult.Edge;
 import com.example.codeknowledgegraph.parser.model.AnalysisResult.FieldInfo;
@@ -21,58 +22,81 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 /**
- * F5.1: Python 项目解析编排——按文件解析 + 全局名称索引二次解析跨文件引用。
- * 全量: 解析全部 .py; 增量: 只解析变更文件,全局索引来自图内种子(未变更部分)。
+ * F5.1: tree-sitter 语言项目编排器——按扩展名路由到对应 LanguageParser,
+ * 并基于全局名称索引解析跨文件引用。
+ * 统一调用解析规则:
+ * - self./this./cls. 前缀 -> 当前类(所属类型)的方法
+ * - Class.m / pkg.f -> 类型简名或模块简名匹配后找方法
+ * - 裸函数名 f -> 优先模块级函数,其次任意同名方法
+ * 已知局限: 接收者变量类型无法静态推断(Go 的 s.Method()、TS 的实例调用),这类边 v1 不建。
  */
 @Service
-public class PythonProjectService {
+public class TreeSitterProjectAnalyzer {
 
-    private static final Logger log = LoggerFactory.getLogger(PythonProjectService.class);
+    private static final Logger log = LoggerFactory.getLogger(TreeSitterProjectAnalyzer.class);
 
-    private final PythonAnalyzer parser;
+    private static final Set<String> SELF_PREFIXES = Set.of("self", "this", "cls");
 
-    public PythonProjectService(PythonAnalyzer parser) {
-        this.parser = parser;
+    private final Map<String, LanguageParser> parsersByExtension = new HashMap<>();
+
+    public TreeSitterProjectAnalyzer(List<LanguageParser> parsers) {
+        for (LanguageParser p : parsers) {
+            for (String ext : p.extensions()) {
+                parsersByExtension.put(ext, p);
+            }
+        }
+        log.info("tree-sitter 语言支持: {}", parsersByExtension.keySet());
+    }
+
+    /** 支持的全部扩展名 */
+    public Set<String> extensions() {
+        return Set.copyOf(parsersByExtension.keySet());
     }
 
     /** 解析结果(实体只含本次解析的文件,可直接 applyDelta;全量时即全部) */
-    public record PyResult(List<TypeInfo> types, List<MethodInfo> methods,
-                           List<FieldInfo> fields, List<Edge> typeEdges, List<Edge> callEdges,
-                           List<String> packages, int fileCount) {}
+    public record Result(List<TypeInfo> types, List<MethodInfo> methods,
+                         List<FieldInfo> fields, List<Edge> typeEdges, List<Edge> callEdges,
+                         List<String> packages, int fileCount) {}
 
     private record Index(Map<String, TypeInfo> typesByQn, Map<String, TypeInfo> typesBySimple,
                           Map<String, List<MethodInfo>> methodsByOwner,
                           Map<String, List<MethodInfo>> methodsByName,
                           Map<String, String> ownerKind) {}
 
-    /** 找出目录下全部 Python 文件(排除虚拟环境/构建产物) */
-    public List<Path> discoverPythonFiles(Path root) throws IOException {
+    /** 找出目录下全部受支持文件(排除虚拟环境/构建产物) */
+    public List<Path> discoverFiles(Path root) throws IOException {
         List<Path> files = new ArrayList<>();
         try (Stream<Path> walk = Files.walk(root)) {
             walk.filter(Files::isRegularFile)
-                    .filter(p -> p.toString().endsWith(".py"))
+                    .filter(p -> {
+                        String name = p.getFileName().toString();
+                        return parsersByExtension.containsKey(extOf(name));
+                    })
                     .filter(p -> {
                         String s = p.toString();
                         return !s.contains("/.git/") && !s.contains("/__pycache__/")
                                 && !s.contains("/venv/") && !s.contains("/.venv/")
                                 && !s.contains("/node_modules/") && !s.contains("/dist/")
-                                && !s.contains("/build/");
+                                && !s.contains("/build/") && !s.contains("/target/");
                     })
                     .forEach(files::add);
         }
         return files;
     }
 
-    /** 全量:解析全部 .py 文件并解析跨文件引用 */
-    public PyResult analyzeProject(Path root, List<Path> pyFiles) {
-        List<FileStructure> structs = parseAll(root, pyFiles);
-        Index index = buildIndex(collectTypes(structs), collectMethods(structs));
+    /** 全量:解析全部受支持文件并解析跨文件引用 */
+    public Result analyzeProject(Path root, List<Path> files) {
+        List<FileStructure> structs = parseAll(root, files);
+        List<TypeInfo> types = new ArrayList<>();
+        List<MethodInfo> methods = new ArrayList<>();
+        structs.forEach(s -> { types.addAll(s.types()); methods.addAll(s.methods()); });
+        Index index = buildIndex(types, methods);
         return resolve(structs, index);
     }
 
     /** 增量:只解析变更文件,跨文件引用按"图内种子 + 本次实体"解析 */
-    public PyResult analyzeIncremental(Path root, List<Path> changedFiles,
-                                        List<TypeInfo> seedTypes, List<MethodInfo> seedMethods) {
+    public Result analyzeIncremental(Path root, List<Path> changedFiles,
+                                      List<TypeInfo> seedTypes, List<MethodInfo> seedMethods) {
         List<FileStructure> structs = parseAll(root, changedFiles);
         List<TypeInfo> allTypes = new ArrayList<>(seedTypes);
         List<MethodInfo> allMethods = new ArrayList<>(seedMethods);
@@ -81,27 +105,22 @@ public class PythonProjectService {
         return resolve(structs, index);
     }
 
-    private List<TypeInfo> collectTypes(List<FileStructure> structs) {
-        List<TypeInfo> out = new ArrayList<>();
-        structs.forEach(s -> out.addAll(s.types()));
-        return out;
-    }
-
-    private List<MethodInfo> collectMethods(List<FileStructure> structs) {
-        List<MethodInfo> out = new ArrayList<>();
-        structs.forEach(s -> out.addAll(s.methods()));
-        return out;
-    }
-
     // ==================== 内部实现 ====================
+
+    private String extOf(String name) {
+        int dot = name.lastIndexOf('.');
+        return dot < 0 ? "" : name.substring(dot);
+    }
 
     private List<FileStructure> parseAll(Path root, List<Path> files) {
         List<FileStructure> structs = new ArrayList<>();
         for (Path f : files) {
+            LanguageParser parser = parsersByExtension.get(extOf(f.getFileName().toString()));
+            if (parser == null) continue;
             try {
                 structs.add(parser.parseFile(root, f));
             } catch (Exception e) {
-                log.warn("Python 解析失败,跳过 {}: {}", f, e.getMessage());
+                log.warn("解析失败,跳过 {}: {}", f, e.getMessage());
             }
         }
         return structs;
@@ -125,8 +144,8 @@ public class PythonProjectService {
         return new Index(typesByQn, typesBySimple, methodsByOwner, methodsByName, ownerKind);
     }
 
-    /** 解析跨文件引用: EXTENDS/CALLS/DEPENDS_ON(按名启发式) */
-    private PyResult resolve(List<FileStructure> structs, Index index) {
+    /** 解析跨文件引用: EXTENDS/IMPLEMENTS/CALLS/DEPENDS_ON(按名启发式) */
+    private Result resolve(List<FileStructure> structs, Index index) {
         List<Edge> callEdges = new ArrayList<>();
         List<Edge> typeEdges = new ArrayList<>();
         Set<String> callDedup = new LinkedHashSet<>();
@@ -136,33 +155,29 @@ public class PythonProjectService {
         for (FileStructure s : structs) {
             packages.addAll(s.packages());
 
-            // 1. EXTENDS: 基类按全限定名或简名匹配,目标存在才建边
+            // 1. EXTENDS/IMPLEMENTS: 基类按全限定名或简名匹配,目标存在才建边
             for (Edge e : s.localEdges()) {
-                if (!"EXTENDS".equals(e.kind())) continue;
-                TypeInfo base = index.typesByQn().get(e.to());
-                if (base == null) base = index.typesBySimple().get(e.to());
-                if (base != null && !base.qualifiedName().equals(e.from())) {
-                    addEdge(typeEdges, typeDedup, new Edge(e.from(), base.qualifiedName(), "EXTENDS"));
+                TypeInfo target = index.typesByQn().get(e.to());
+                if (target == null) target = index.typesBySimple().get(e.to());
+                if (target != null && !target.qualifiedName().equals(e.from())) {
+                    addEdge(typeEdges, typeDedup,
+                            new Edge(e.from(), target.qualifiedName(), e.kind()));
                 }
             }
 
-            // 2. CALLS: self.m / Class.m / 裸函数名
+            // 2. CALLS
             for (FileStructure.NameRef ref : s.unresolvedCalls()) {
                 Edge call = resolveCall(ref.from(), ref.name(), index);
                 if (call != null) addEdge(callEdges, callDedup, call);
             }
 
-            // 3. DEPENDS_ON: import 的模块/类若在图内
+            // 3. DEPENDS_ON: 导入的模块/类若在图内
             for (FileStructure.NameRef ref : s.unresolvedImports()) {
                 TypeInfo target = index.typesByQn().get(ref.name());
-                if (target == null) {
-                    // 前缀匹配: import a.b.c 时 a.b 包的 __init__ 模块(存在则为 a.b)
-                    TypeInfo mod = index.typesByQn().get(ref.name());
-                    if (mod == null) continue;
-                    target = mod;
-                }
+                if (target == null) continue;
                 if (!target.qualifiedName().equals(s.moduleQn())) {
-                    addEdge(typeEdges, typeDedup, new Edge(s.moduleQn(), target.qualifiedName(), "DEPENDS_ON"));
+                    addEdge(typeEdges, typeDedup,
+                            new Edge(s.moduleQn(), target.qualifiedName(), "DEPENDS_ON"));
                 }
             }
         }
@@ -170,7 +185,7 @@ public class PythonProjectService {
         List<MethodInfo> methods = new ArrayList<>();
         List<FieldInfo> fields = new ArrayList<>();
         structs.forEach(s -> { types.addAll(s.types()); methods.addAll(s.methods()); fields.addAll(s.fields()); });
-        return new PyResult(types, methods, fields, typeEdges, callEdges,
+        return new Result(types, methods, fields, typeEdges, callEdges,
                 new ArrayList<>(packages), structs.size());
     }
 
@@ -178,22 +193,30 @@ public class PythonProjectService {
         // 装饰器引用的 from 是类/模块(非方法 id),无法建 CALLS 边,跳过
         if (!fromMethodId.matches(".+\\.\\w+\\(\\d+\\)$")) return null;
 
-        if (ref.startsWith("self.") || ref.startsWith("cls.")) {
-            String owner = ownerOf(fromMethodId);
-            String methodName = ref.substring(ref.indexOf('.') + 1);
-            MethodInfo target = findMethod(index, owner, methodName);
-            return target == null ? null : new Edge(fromMethodId, target.id(), "CALLS");
+        // self./this./cls. -> 当前类型的方法
+        int firstDot = ref.indexOf('.');
+        if (firstDot > 0) {
+            String prefix = ref.substring(0, firstDot);
+            if (SELF_PREFIXES.contains(prefix)) {
+                String owner = ownerOf(fromMethodId);
+                String methodName = ref.substring(firstDot + 1);
+                MethodInfo target = findMethod(index, owner, methodName);
+                return target == null ? null : new Edge(fromMethodId, target.id(), "CALLS");
+            }
         }
+        // Class.m / module.f
         int lastDot = ref.lastIndexOf('.');
         if (lastDot > 0) {
-            String clsPart = ref.substring(0, lastDot);
+            String ownerPart = ref.substring(0, lastDot);
             String methodName = ref.substring(lastDot + 1);
-            TypeInfo cls = index.typesByQn().containsKey(clsPart)
-                    ? index.typesByQn().get(clsPart)
-                    : index.typesBySimple().get(clsPart);
-            if (cls == null) return null;
-            MethodInfo target = findMethod(index, cls.qualifiedName(), methodName);
-            return target == null ? null : new Edge(fromMethodId, target.id(), "CALLS");
+            TypeInfo ownerType = index.typesByQn().containsKey(ownerPart)
+                    ? index.typesByQn().get(ownerPart)
+                    : index.typesBySimple().get(ownerPart);
+            if (ownerType != null) {
+                MethodInfo target = findMethod(index, ownerType.qualifiedName(), methodName);
+                return target == null ? null : new Edge(fromMethodId, target.id(), "CALLS");
+            }
+            return null;
         }
         // 裸函数名:优先模块级函数,其次任意同名方法
         List<MethodInfo> candidates = index.methodsByName().get(ref);

@@ -6,7 +6,7 @@ import com.example.codeknowledgegraph.parser.model.AnalysisResult.Edge;
 import com.example.codeknowledgegraph.parser.model.AnalysisResult.FieldInfo;
 import com.example.codeknowledgegraph.parser.model.AnalysisResult.MethodInfo;
 import com.example.codeknowledgegraph.parser.model.AnalysisResult.TypeInfo;
-import com.example.codeknowledgegraph.parser.python.PythonProjectService;
+import com.example.codeknowledgegraph.parser.support.TreeSitterProjectAnalyzer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -40,14 +40,14 @@ public class ProjectAnalysisService {
     private final CodeAnalyzer analyzer;
     private final GraphStoreService store;
     private final GitInfoService git;
-    private final PythonProjectService python;
+    private final TreeSitterProjectAnalyzer treeSitter;
 
     public ProjectAnalysisService(CodeAnalyzer analyzer, GraphStoreService store, GitInfoService git,
-                                   PythonProjectService python) {
+                                   TreeSitterProjectAnalyzer treeSitter) {
         this.analyzer = analyzer;
         this.store = store;
         this.git = git;
-        this.python = python;
+        this.treeSitter = treeSitter;
     }
 
     /**
@@ -71,9 +71,11 @@ public class ProjectAnalysisService {
         if (!forceFull && head != null && !prevCommit.isBlank() && sameRoot) {
             GitInfoService.ChangeSet cs = git.changeSince(abs, prevCommit);
             List<String> reanalyze = cs.reanalyze().stream()
-                    .filter(f -> (f.endsWith(".java") || f.endsWith(".py")) && !f.contains("/target/")).toList();
+                    .filter(f -> (f.endsWith(".java") || f.endsWith(".py") || f.endsWith(".ts")
+                            || f.endsWith(".tsx") || f.endsWith(".go")) && !f.contains("/target/")).toList();
             List<String> deleted = cs.deleted().stream()
-                    .filter(f -> (f.endsWith(".java") || f.endsWith(".py")) && !f.contains("/target/")).toList();
+                    .filter(f -> (f.endsWith(".java") || f.endsWith(".py") || f.endsWith(".ts")
+                            || f.endsWith(".tsx") || f.endsWith(".go")) && !f.contains("/target/")).toList();
 
             // 图谱只关心 .java:原始变更集非空但过滤后为空(如仅新增了配置文件)同样视为无变化
             if (cs.noChanges() || (reanalyze.isEmpty() && deleted.isEmpty())) {
@@ -124,7 +126,7 @@ public class ProjectAnalysisService {
         store.deleteByFilePaths(projectName, all);
         long tDelete = System.currentTimeMillis();
 
-        // 3. 增量解析并落地: Java 与 Python 分别解析,合并为一个增量
+        // 3. 增量解析并落地: Java(tree-sitter 之外)与 tree-sitter 语言分别解析,合并为一个增量
         AnalysisResult delta = reanalyze.stream().anyMatch(f -> f.endsWith(".java"))
                 ? analyzer.analyzeDelta(projectName, abs,
                         reanalyze.stream().filter(f -> f.endsWith(".java")).toList(), seed)
@@ -132,13 +134,13 @@ public class ProjectAnalysisService {
                         List.of(), List.of(), List.of(), List.of(), 0);
         long tDelta = System.currentTimeMillis();
         log.info("[增量计时] Java 增量解析总耗时: {}ms", tDelta - tDelete);
-        PythonProjectService.PyResult pyDelta = reanalyze.stream().anyMatch(f -> f.endsWith(".py"))
-                ? python.analyzeIncremental(abs,
-                        reanalyze.stream().filter(f -> f.endsWith(".py")).map(abs::resolve).toList(),
-                        typeSeed, methodSeed)
-                : null;
-        AnalysisResult combined = pyDelta == null ? delta
-                : merge(delta, pyDelta, projectName, abs);
+        List<Path> treeSitterFiles = reanalyze.stream()
+                .filter(f -> !f.endsWith(".java"))
+                .map(abs::resolve).toList();
+        TreeSitterProjectAnalyzer.Result tsDelta = treeSitterFiles.isEmpty() ? null
+                : treeSitter.analyzeIncremental(abs, treeSitterFiles, typeSeed, methodSeed);
+        AnalysisResult combined = tsDelta == null ? delta
+                : merge(delta, tsDelta, projectName, abs);
         store.applyDelta(combined);
         store.restoreCrossEdges(projectName, captured);
         log.info("[增量计时] 写入+边恢复: {}ms", System.currentTimeMillis() - tDelta);
@@ -167,31 +169,32 @@ public class ProjectAnalysisService {
     private Map<String, Object> full(String projectName, Path abs, String head, long start)
             throws IOException {
         AnalysisResult java = analyzer.analyze(projectName, abs);
-        PythonProjectService.PyResult py = pythonResult(projectName, abs, List.of(), List.of(), List.of());
+        TreeSitterProjectAnalyzer.Result py = treeSitterResult(abs, List.of(), List.of(), List.of());
         AnalysisResult result = merge(java, py, projectName, abs);
         Map<String, Object> stats = store.replaceProject(result, abs.toString(), head);
         stats.put("tookMs", System.currentTimeMillis() - start);
         return stats;
     }
 
-    /** F5.1: 解析项目内全部 .py 文件(无则返回空) */
-    private PythonProjectService.PyResult pythonResult(String projectName, Path abs,
-                                                        List<String> changedRelPaths,
-                                                        List<TypeInfo> seedTypes, List<MethodInfo> seedMethods)
+    /** F5.1: 解析项目内全部 tree-sitter 支持的文件(无则返回空) */
+    private TreeSitterProjectAnalyzer.Result treeSitterResult(Path abs,
+                                                              List<String> changedRelPaths,
+                                                              List<TypeInfo> seedTypes,
+                                                              List<MethodInfo> seedMethods)
             throws IOException {
-        List<Path> pyFiles = python.discoverPythonFiles(abs).stream()
+        List<Path> pyFiles = treeSitter.discoverFiles(abs).stream()
                 .filter(p -> changedRelPaths.isEmpty()
                         || changedRelPaths.contains(abs.relativize(p).toString().replace('\\', '/')))
                 .toList();
-        if (pyFiles.isEmpty()) return new PythonProjectService.PyResult(
+        if (pyFiles.isEmpty()) return new TreeSitterProjectAnalyzer.Result(
                 List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), 0);
         return changedRelPaths.isEmpty()
-                ? python.analyzeProject(abs, pyFiles)
-                : python.analyzeIncremental(abs, pyFiles, seedTypes, seedMethods);
+                ? treeSitter.analyzeProject(abs, pyFiles)
+                : treeSitter.analyzeIncremental(abs, pyFiles, seedTypes, seedMethods);
     }
 
     /** F5.1: 合并 Java 与 Python 的分析结果 */
-    private AnalysisResult merge(AnalysisResult java, PythonProjectService.PyResult py,
+    private AnalysisResult merge(AnalysisResult java, TreeSitterProjectAnalyzer.Result py,
                                   String projectName, Path root) {
         List<TypeInfo> types = new ArrayList<>(java.types());
         List<MethodInfo> methods = new ArrayList<>(java.methods());
