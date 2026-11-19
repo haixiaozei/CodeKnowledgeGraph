@@ -119,7 +119,7 @@
 | 编号 | 需求 | 状态 | 说明 |
 |------|------|------|------|
 | F5.1a | Python 解析器(tree-sitter) | ✅ 已交付 | LanguageParser 接口抽象;module/class/函数/docstring/装饰器(路由→REST 端点);按名启发式调用边;全量+增量双管道;真实项目(requests)验证通过 |
-| F5.1b | TypeScript / Go 解析器 | ⬜ 待做 | 照 Python 模式各写一个 LanguageParser 实现;tree-sitter 依赖已就位 |
+| F5.1b | TypeScript / Go 解析器 | ✅ 已交付 | TS(.ts/.tsx 含接口/箭头函数/NestJS 路由→REST 端点/new 调用)与 Go(struct/interface/receiver 方法/注释→javadoc);真实项目验证: zod(513 文件 3.8s, ZodString 继承正确)与 uuid(调用边语义正确);编排器泛化为 TreeSitterProjectAnalyzer(注入全部 LanguageParser,新语言零管道改动) |
 | F5.2 | 语义搜索 | ⬜ 未开始 | 方法/类型 embedding + 向量检索,支持"找做 X 事的代码"。前置条件: 需选定 embedding 提供方(OpenAI 兼容接口/API Key) |
 | F5.3 | 团队共享 | ⬜ 未开始 | 中心化部署 + 项目级隔离 + 鉴权(脱离单机工具定位后再做) |
 
